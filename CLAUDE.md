@@ -2,6 +2,12 @@
 
 Decentralized AI inference on Apple Silicon. Native macOS MenuBarExtra app that turns any Mac into a node in a peer-to-peer inference network.
 
+## Chat Logs
+
+Session notes live in `chats/` as markdown files named by date (e.g. `chats/2026-04-05.md`). Read these for context on decisions made, problems encountered, and what was built in each session.
+
+**Rule: At the end of every session, create or update a chat log in `chats/YYYY-MM-DD.md` summarizing what was done, key decisions, and issues encountered.** If multiple sessions happen on the same day, append to the existing file.
+
 ## Project Status
 
 ### Phase 1 — Local Inference (Complete)
