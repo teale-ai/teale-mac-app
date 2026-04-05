@@ -1,0 +1,76 @@
+import Foundation
+import SharedTypes
+import HardwareProfile
+import MLXLMCommon
+import MLXLLM
+import MLXInference
+
+// MARK: - Download Progress
+
+public enum DownloadProgress: Sendable {
+    case downloading(fraction: Double)
+    case completed
+    case failed(String)
+}
+
+// MARK: - Model Manager Service
+
+@Observable
+public final class ModelManagerService: @unchecked Sendable {
+    public let catalog: ModelCatalog
+    public let cache: ModelCache
+    private let hardware: HardwareCapability
+
+    public private(set) var downloadingModels: [String: Double] = [:]  // modelID -> progress
+
+    public init(hardware: HardwareCapability, maxStorageGB: Double = 50.0) {
+        self.catalog = ModelCatalog()
+        self.cache = ModelCache(maxStorageGB: maxStorageGB)
+        self.hardware = hardware
+    }
+
+    /// Models that can run on this hardware
+    public var compatibleModels: [ModelDescriptor] {
+        catalog.availableModels(for: hardware)
+    }
+
+    /// Check if a model is downloaded
+    public func isDownloaded(_ model: ModelDescriptor) async -> Bool {
+        await cache.isModelCached(model)
+    }
+
+    /// Download a model (MLX handles download internally via HuggingFace Hub)
+    public func downloadModel(_ descriptor: ModelDescriptor) async throws {
+        downloadingModels[descriptor.id] = 0.0
+
+        do {
+            try await cache.ensureDirectory()
+
+            let config = ModelConfiguration(id: descriptor.huggingFaceRepo)
+            _ = try await LLMModelFactory.shared.loadContainer(
+                from: HFDownloader(),
+                using: HFTokenizerLoader(),
+                configuration: config
+            ) { [weak self] progress in
+                Task { @MainActor in
+                    self?.downloadingModels[descriptor.id] = progress.fractionCompleted
+                }
+            }
+
+            downloadingModels.removeValue(forKey: descriptor.id)
+        } catch {
+            downloadingModels.removeValue(forKey: descriptor.id)
+            throw error
+        }
+    }
+
+    /// Delete a model from cache
+    public func deleteModel(_ descriptor: ModelDescriptor) async throws {
+        try await cache.deleteModel(descriptor)
+    }
+
+    /// Current cache size
+    public func cacheSizeGB() async -> Double {
+        await cache.totalSizeGB()
+    }
+}
