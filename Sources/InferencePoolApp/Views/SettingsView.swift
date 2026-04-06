@@ -22,25 +22,25 @@ struct SettingsView: View {
 
         Form {
             // Account
-            Section("Account") {
+            Section(appState.loc("settings.account")) {
                 if let authManager = appState.authManager {
                     switch authManager.authState {
                     case .signedIn(let user):
                         if let phone = user.phone {
-                            LabeledContent("Phone", value: phone)
+                            LabeledContent(appState.loc("common.phone"), value: phone)
                         }
                         if let email = user.email {
-                            LabeledContent("Email", value: email)
+                            LabeledContent(appState.loc("common.email"), value: email)
                         }
-                        LabeledContent("Devices", value: "\(authManager.devices.count)")
-                        Button("Sign Out") {
+                        LabeledContent(appState.loc("common.devices"), value: "\(authManager.devices.count)")
+                        Button(appState.loc("settings.signOut")) {
                             Task { await authManager.signOut() }
                         }
                     case .signingIn:
                         HStack(spacing: 8) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text("Signing in...")
+                            Text(appState.loc("common.signingIn"))
                                 .font(.subheadline)
                         }
                     default:
@@ -48,14 +48,14 @@ struct SettingsView: View {
                             Image(systemName: "person.crop.circle.badge.questionmark")
                                 .foregroundStyle(.secondary)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Not signed in")
+                                Text(appState.loc("settings.notSignedIn"))
                                     .font(.subheadline)
-                                Text("Sign in to sync devices and back up your wallet")
+                                Text(appState.loc("settings.signInSubtitle"))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                         }
-                        Button("Sign In") {
+                        Button(appState.loc("settings.signIn")) {
                             appState.currentView = .settings
                             appState.showSignIn = true
                         }
@@ -67,9 +67,9 @@ struct SettingsView: View {
                         Image(systemName: "person.crop.circle")
                             .foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Local mode")
+                            Text(appState.loc("settings.localMode"))
                                 .font(.subheadline)
-                            Text("Configure Supabase to enable sign-in and device sync")
+                            Text(appState.loc("settings.localModeSubtitle"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -78,24 +78,30 @@ struct SettingsView: View {
             }
 
             // General
-            Section("General") {
-                Toggle("Launch at Login", isOn: $launchAtLogin)
+            Section(appState.loc("settings.general")) {
+                Toggle(appState.loc("settings.launchAtLogin"), isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, newValue in
                         setLaunchAtLogin(newValue)
                     }
+
+                Picker(appState.loc("settings.language"), selection: $state.language) {
+                    ForEach(AppLanguage.allCases) { lang in
+                        Text(lang.displayName).tag(lang)
+                    }
+                }
             }
 
             // Connect Your Agent
             ConnectAgentSection()
 
             // LAN Cluster
-            Section("LAN Cluster") {
-                Toggle("Enable LAN Discovery", isOn: $state.clusterEnabled)
+            Section(appState.loc("settings.lanCluster")) {
+                Toggle(appState.loc("settings.enableLAN"), isOn: $state.clusterEnabled)
 
                 if appState.clusterEnabled {
                     HStack {
-                        Text("Cluster Passcode:")
-                        SecureField("Optional", text: $clusterPasscode)
+                        Text(appState.loc("settings.clusterPasscode"))
+                        SecureField(appState.loc("settings.optional"), text: $clusterPasscode)
                             .frame(width: 150)
                             .textFieldStyle(.roundedBorder)
                             .onChange(of: clusterPasscode) { _, newValue in
@@ -108,32 +114,32 @@ struct SettingsView: View {
                         Circle()
                             .fill(peerCount > 0 ? .green : .orange)
                             .frame(width: 8, height: 8)
-                        Text(peerCount > 0 ? "\(peerCount) peer(s) connected" : "Searching for peers...")
+                        Text(peerCount > 0 ? String(format: appState.loc("settings.peersConnected"), peerCount) : appState.loc("settings.searchingPeers"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
 
                     VStack(alignment: .leading) {
-                        Text("Org capacity reservation: \(Int(orgReservation))%")
+                        Text(String(format: appState.loc("settings.orgReservation"), Int(orgReservation)))
                             .font(.caption)
                         Slider(value: $orgReservation, in: 0...100, step: 10)
                             .onChange(of: orgReservation) { _, newValue in
                                 appState.clusterManager.orgCapacityReservation = newValue / 100.0
                             }
                     }
-                    Text("Nodes with the same passcode form your organization. Reserved capacity serves org members first.")
+                    Text(appState.loc("settings.orgReservationHelp"))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
             }
 
             // WAN P2P
-            Section("WAN P2P Network") {
-                Toggle("Enable WAN", isOn: $state.wanEnabled)
+            Section(appState.loc("settings.wanP2P")) {
+                Toggle(appState.loc("settings.enableWAN"), isOn: $state.wanEnabled)
 
                 if appState.wanEnabled {
                     HStack {
-                        Text("Relay Server:")
+                        Text(appState.loc("settings.relayServer"))
                         TextField("URL", text: $wanRelayURL)
                             .frame(width: 200)
                             .textFieldStyle(.roundedBorder)
@@ -148,13 +154,13 @@ struct SettingsView: View {
                             .fill(wanState.relayStatus == .connected ? .green : .orange)
                             .frame(width: 8, height: 8)
                         Text(wanState.relayStatus == .connected ?
-                             "\(wanState.connectedPeers.count) WAN peer(s)" :
-                             "Connecting to relay...")
+                             String(format: appState.loc("settings.wanPeers"), wanState.connectedPeers.count) :
+                             appState.loc("settings.connectingRelay"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
 
-                    LabeledContent("NAT Type", value: wanState.natType.rawValue)
+                    LabeledContent(appState.loc("settings.natType"), value: wanState.natType.rawValue)
                         .font(.caption)
                 }
             }
@@ -163,12 +169,12 @@ struct SettingsView: View {
             ContributionScheduleSection()
 
             // Credits
-            Section("Credits") {
-                LabeledContent("Balance", value: String(format: "%.2f credits", appState.wallet.balance.value))
-                LabeledContent("Total Earned", value: String(format: "%.2f", appState.wallet.totalEarned.value))
-                LabeledContent("Total Spent", value: String(format: "%.2f", appState.wallet.totalSpent.value))
+            Section(appState.loc("settings.credits")) {
+                LabeledContent(appState.loc("settings.balance"), value: String(format: "%.2f credits", appState.wallet.balance.value))
+                LabeledContent(appState.loc("settings.totalEarned"), value: String(format: "%.2f", appState.wallet.totalEarned.value))
+                LabeledContent(appState.loc("settings.totalSpent"), value: String(format: "%.2f", appState.wallet.totalSpent.value))
 
-                Button("View Wallet") {
+                Button(appState.loc("settings.viewWallet")) {
                     appState.currentView = .wallet
                 }
                 .buttonStyle(.bordered)
@@ -176,38 +182,38 @@ struct SettingsView: View {
             }
 
             // Storage
-            Section("Model Storage") {
+            Section(appState.loc("settings.modelStorage")) {
                 VStack(alignment: .leading) {
-                    Text("Maximum storage: \(Int(maxStorage)) GB")
+                    Text(String(format: appState.loc("settings.maxStorage"), Int(maxStorage)))
                     Slider(value: $maxStorage, in: 5...200, step: 5)
                 }
             }
 
             // Hardware Info
-            Section("Hardware") {
-                LabeledContent("Chip", value: appState.hardware.chipName)
-                LabeledContent("RAM", value: "\(Int(appState.hardware.totalRAMGB)) GB")
-                LabeledContent("GPU Cores", value: "\(appState.hardware.gpuCoreCount)")
-                LabeledContent("Memory Bandwidth", value: String(format: "%.0f GB/s", appState.hardware.memoryBandwidthGBs))
-                LabeledContent("Device Tier", value: tierDescription)
+            Section(appState.loc("settings.hardware")) {
+                LabeledContent(appState.loc("settings.chip"), value: appState.hardware.chipName)
+                LabeledContent(appState.loc("settings.ram"), value: "\(Int(appState.hardware.totalRAMGB)) GB")
+                LabeledContent(appState.loc("settings.gpuCores"), value: "\(appState.hardware.gpuCoreCount)")
+                LabeledContent(appState.loc("settings.memBandwidth"), value: String(format: "%.0f GB/s", appState.hardware.memoryBandwidthGBs))
+                LabeledContent(appState.loc("settings.deviceTier"), value: tierDescription)
             }
 
             // About
-            Section("About") {
-                LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")
-                LabeledContent("Engine", value: "MLX")
-                Link("Source Code", destination: URL(string: "https://github.com/taylorhou/teale-mac-app")!)
+            Section(appState.loc("settings.about")) {
+                LabeledContent(appState.loc("settings.version"), value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")
+                LabeledContent(appState.loc("settings.engine"), value: "MLX")
+                Link(appState.loc("settings.sourceCode"), destination: URL(string: "https://github.com/taylorhou/teale-mac-app")!)
             }
 
             // Quit
             Section {
-                Button("Quit Teale", role: .destructive) {
+                Button(appState.loc("settings.quit"), role: .destructive) {
                     NSApplication.shared.terminate(nil)
                 }
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("Settings")
+        .navigationTitle(appState.loc("settings.title"))
         .onAppear {
             maxStorage = appState.maxStorageGB
             apiPort = String(appState.serverPort)
@@ -271,13 +277,13 @@ private struct ConnectAgentSection: View {
             quickCopySnippets
 
             // Advanced
-            DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
+            DisclosureGroup(appState.loc("agent.advanced"), isExpanded: $showAdvanced) {
                 advancedSection
             }
         } header: {
-            Label("Connect Your Agent", systemImage: "link")
+            Label(appState.loc("agent.connect"), systemImage: "link")
         } footer: {
-            Text("Works with any OpenAI-compatible client — Claude Code, Cursor, Hermes, OpenClaw, Python SDK, and more.")
+            Text(appState.loc("agent.footer"))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -294,7 +300,7 @@ private struct ConnectAgentSection: View {
                 .fill(appState.isServerRunning ? .green : .red)
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 1) {
-                Text(appState.isServerRunning ? "API Server Running" : "API Server Starting...")
+                Text(appState.isServerRunning ? appState.loc("agent.serverRunning") : appState.loc("agent.serverStarting"))
                     .font(.callout.weight(.medium))
                 Text(endpoint)
                     .font(.caption.monospaced())
@@ -302,7 +308,7 @@ private struct ConnectAgentSection: View {
                     .textSelection(.enabled)
             }
             Spacer()
-            copyButton(text: endpoint, item: .endpoint, label: "Copy")
+            copyButton(text: endpoint, item: .endpoint, label: appState.loc("common.copy"))
         }
     }
 
@@ -318,7 +324,7 @@ private struct ConnectAgentSection: View {
         } label: {
             HStack {
                 Image(systemName: "key.fill")
-                Text("Generate API Key")
+                Text(appState.loc("agent.generateKey"))
                 Spacer()
             }
             .contentShape(Rectangle())
@@ -344,7 +350,7 @@ private struct ConnectAgentSection: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    copyButton(text: key.key, item: .key, label: "Copy Key")
+                    copyButton(text: key.key, item: .key, label: appState.loc("common.copy"))
                 }
             }
         }
@@ -358,7 +364,7 @@ private struct ConnectAgentSection: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
                     .font(.caption)
-                Text("Save this key — it won't be shown again")
+                Text(appState.loc("agent.saveKeyWarning"))
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.orange)
             }
@@ -368,7 +374,7 @@ private struct ConnectAgentSection: View {
                     .textSelection(.enabled)
                     .lineLimit(1)
                 Spacer()
-                copyButton(text: key, item: .key, label: "Copy")
+                copyButton(text: key, item: .key, label: appState.loc("common.copy"))
             }
         }
         .padding(10)
@@ -379,7 +385,7 @@ private struct ConnectAgentSection: View {
 
     private var quickCopySnippets: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Quick Setup")
+            Text(appState.loc("agent.quickSetup"))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
@@ -421,7 +427,7 @@ private struct ConnectAgentSection: View {
             HStack(spacing: 4) {
                 Image(systemName: copied == item ? "checkmark" : icon)
                     .frame(width: 14)
-                Text(copied == item ? "Copied" : title)
+                Text(copied == item ? appState.loc("common.copied") : title)
             }
             .font(.caption)
             .frame(maxWidth: .infinity)
@@ -448,11 +454,11 @@ private struct ConnectAgentSection: View {
                         }
                         Spacer()
                         if !key.isActive {
-                            Text("Revoked")
+                            Text(appState.loc("agent.revoked"))
                                 .font(.caption2)
                                 .foregroundStyle(.red)
                         } else {
-                            Button("Revoke") {
+                            Button(appState.loc("agent.revoke")) {
                                 Task {
                                     await appState.apiKeyStore.revokeKey(id: key.id)
                                     await refreshKeys()
@@ -466,7 +472,7 @@ private struct ConnectAgentSection: View {
             }
 
             // Generate another key
-            Button("Generate Another Key") {
+            Button(appState.loc("agent.generateAnother")) {
                 Task {
                     let key = await appState.apiKeyStore.generateKey(name: "Key \(apiKeys.count + 1)")
                     generatedKey = key.key
@@ -480,10 +486,10 @@ private struct ConnectAgentSection: View {
 
             // Network access toggle
             @Bindable var state = appState
-            Toggle("Allow Network Access", isOn: $state.allowNetworkAccess)
+            Toggle(appState.loc("agent.allowNetwork"), isOn: $state.allowNetworkAccess)
             Text(appState.allowNetworkAccess
-                 ? "Accepting requests from other devices on the network"
-                 : "Only accepting requests from this Mac (localhost)")
+                 ? appState.loc("agent.networkOn")
+                 : appState.loc("agent.networkOff"))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -544,7 +550,7 @@ private struct ConnectAgentSection: View {
             HStack(spacing: 3) {
                 Image(systemName: copied == item ? "checkmark" : "doc.on.doc")
                     .frame(width: 12)
-                Text(copied == item ? "Copied" : label)
+                Text(copied == item ? appState.loc("common.copied") : label)
             }
             .font(.caption)
         }
@@ -568,8 +574,8 @@ private struct ContributionScheduleSection: View {
     @State private var showGrid: Bool = false
 
     var body: some View {
-        Section("Contribution Schedule") {
-            Picker("Preset", selection: $selectedPreset) {
+        Section(appState.loc("settings.contributionSchedule")) {
+            Picker(appState.loc("settings.preset"), selection: $selectedPreset) {
                 ForEach(SchedulePreset.allCases, id: \.self) { preset in
                     Text(preset.displayName).tag(preset)
                 }
@@ -581,21 +587,21 @@ private struct ContributionScheduleSection: View {
                 appState.throttler.updateSchedule(schedule)
             }
 
-            Toggle("Only when plugged in", isOn: $onlyWhenPluggedIn)
+            Toggle(appState.loc("settings.onlyPluggedIn"), isOn: $onlyWhenPluggedIn)
                 .onChange(of: onlyWhenPluggedIn) { _, newValue in
                     var schedule = appState.throttler.contributionSchedule
                     schedule.onlyWhenPluggedIn = newValue
                     appState.throttler.updateSchedule(schedule)
                 }
 
-            Toggle("Only on Wi-Fi", isOn: $onlyOnWiFi)
+            Toggle(appState.loc("settings.onlyWiFi"), isOn: $onlyOnWiFi)
                 .onChange(of: onlyOnWiFi) { _, newValue in
                     var schedule = appState.throttler.contributionSchedule
                     schedule.onlyOnWiFi = newValue
                     appState.throttler.updateSchedule(schedule)
                 }
 
-            Button(showGrid ? "Hide Schedule" : "Edit Schedule") {
+            Button(showGrid ? appState.loc("settings.hideSchedule") : appState.loc("settings.editSchedule")) {
                 showGrid.toggle()
             }
             .buttonStyle(.bordered)
@@ -608,7 +614,7 @@ private struct ContributionScheduleSection: View {
                 ))
             }
 
-            Text("Controls when your machine serves network requests. Local inference is always available.")
+            Text(appState.loc("settings.scheduleHelp"))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -624,9 +630,12 @@ private struct ContributionScheduleSection: View {
 // MARK: - Schedule Grid View
 
 private struct ScheduleGridView: View {
+    @Environment(AppState.self) private var appState
     @Binding var schedule: ContributionSchedule
 
-    private let days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    private var days: [String] {
+        [appState.loc("day.mon"), appState.loc("day.tue"), appState.loc("day.wed"), appState.loc("day.thu"), appState.loc("day.fri"), appState.loc("day.sat"), appState.loc("day.sun")]
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {

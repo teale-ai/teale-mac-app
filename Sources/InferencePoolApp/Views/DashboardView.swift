@@ -48,7 +48,7 @@ struct DashboardView: View {
             }
             .padding()
         }
-        .navigationTitle("Dashboard")
+        .navigationTitle(appState.loc("dashboard.title"))
     }
 }
 
@@ -92,7 +92,7 @@ private struct HardwareInfoSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Hardware")
+            Text(appState.loc("dashboard.hardware"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -105,7 +105,7 @@ private struct HardwareInfoSection: View {
             HStack(spacing: 16) {
                 InfoPill(
                     icon: "thermometer",
-                    text: appState.throttler.thermalMonitor.thermalLevel.rawValue.capitalized,
+                    text: thermalText,
                     color: thermalColor
                 )
                 InfoPill(
@@ -115,9 +115,18 @@ private struct HardwareInfoSection: View {
                 )
                 InfoPill(
                     icon: "speedometer",
-                    text: "Throttle: \(appState.throttler.throttleLevel.rawValue)%"
+                    text: "\(appState.loc("dashboard.throttle")): \(appState.throttler.throttleLevel.rawValue)%"
                 )
             }
+        }
+    }
+
+    private var thermalText: String {
+        switch appState.throttler.thermalMonitor.thermalLevel {
+        case .nominal: return appState.loc("thermal.nominal")
+        case .fair: return appState.loc("thermal.fair")
+        case .serious: return appState.loc("thermal.serious")
+        case .critical: return appState.loc("thermal.critical")
         }
     }
 
@@ -132,11 +141,11 @@ private struct HardwareInfoSection: View {
 
     private var powerText: String {
         let power = appState.throttler.powerMonitor.powerState
-        if power.isOnACPower { return "AC Power" }
+        if power.isOnACPower { return appState.loc("power.ac") }
         if let battery = power.batteryLevel {
-            return "\(Int(battery * 100))% Battery"
+            return "\(Int(battery * 100))% \(appState.loc("power.battery"))"
         }
-        return "Battery"
+        return appState.loc("power.battery")
     }
 
     private var powerColor: Color {
@@ -175,7 +184,7 @@ private struct EngineStatusSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Engine")
+            Text(appState.loc("dashboard.engine"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -189,16 +198,16 @@ private struct EngineStatusSection: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Unload") {
+                    Button(appState.loc("dashboard.unload")) {
                         Task { await appState.unloadModel() }
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 }
             } else {
-                Text("No model loaded")
+                Text(appState.loc("dashboard.noModelLoaded"))
                     .foregroundStyle(.secondary)
-                Button("Browse Models") {
+                Button(appState.loc("dashboard.browseModels")) {
                     appState.currentView = .models
                 }
                 .buttonStyle(.bordered)
@@ -215,7 +224,7 @@ private struct QuickActionsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Quick Actions")
+            Text(appState.loc("dashboard.quickActions"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -223,7 +232,7 @@ private struct QuickActionsSection: View {
                 Button {
                     appState.currentView = .chat
                 } label: {
-                    Label("New Chat", systemImage: "plus.bubble")
+                    Label(appState.loc("dashboard.newChat"), systemImage: "plus.bubble")
                 }
                 .buttonStyle(.bordered)
 
@@ -233,7 +242,7 @@ private struct QuickActionsSection: View {
                         NSPasteboard.general.setString("http://localhost:\(port)/v1", forType: .string)
                     }
                 } label: {
-                    Label("Copy API URL", systemImage: "doc.on.doc")
+                    Label(appState.loc("dashboard.copyAPIURL"), systemImage: "doc.on.doc")
                 }
                 .buttonStyle(.bordered)
             }
@@ -249,11 +258,11 @@ private struct ClusterSummarySection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Cluster")
+                Text(appState.loc("dashboard.cluster"))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("View") {
+                Button(appState.loc("dashboard.view")) {
                     appState.currentView = .cluster
                 }
                 .buttonStyle(.bordered)
@@ -265,19 +274,19 @@ private struct ClusterSummarySection: View {
                 HStack(spacing: 12) {
                     InfoPill(
                         icon: "desktopcomputer",
-                        text: "\(state.connectedPeerCount + 1) devices",
+                        text: String(format: appState.loc("dashboard.devices"), state.connectedPeerCount + 1),
                         color: .green
                     )
                     InfoPill(
                         icon: "memorychip",
-                        text: "\(Int(state.totalClusterRAMGB + appState.hardware.totalRAMGB)) GB total"
+                        text: String(format: appState.loc("dashboard.total"), Int(state.totalClusterRAMGB + appState.hardware.totalRAMGB))
                     )
                 }
             } else {
                 HStack {
                     ProgressView()
                         .controlSize(.small)
-                    Text("Searching for peers...")
+                    Text(appState.loc("dashboard.searchingPeers"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -294,11 +303,11 @@ private struct WANSummarySection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("WAN Network")
+                Text(appState.loc("dashboard.wan"))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("View") {
+                Button(appState.loc("dashboard.view")) {
                     appState.currentView = .wan
                 }
                 .buttonStyle(.bordered)
@@ -310,7 +319,7 @@ private struct WANSummarySection: View {
                 HStack(spacing: 12) {
                     InfoPill(
                         icon: "globe",
-                        text: "\(wanState.connectedPeers.count) WAN peers",
+                        text: String(format: appState.loc("dashboard.wanPeers"), wanState.connectedPeers.count),
                         color: .blue
                     )
                     InfoPill(
@@ -322,7 +331,7 @@ private struct WANSummarySection: View {
                 HStack {
                     ProgressView()
                         .controlSize(.small)
-                    Text("Connecting to WAN network...")
+                    Text(appState.loc("dashboard.connectingWAN"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -339,11 +348,11 @@ private struct CreditBalanceSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Credits")
+                Text(appState.loc("dashboard.credits"))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Wallet") {
+                Button(appState.loc("sidebar.wallet")) {
                     appState.currentView = .wallet
                 }
                 .buttonStyle(.bordered)

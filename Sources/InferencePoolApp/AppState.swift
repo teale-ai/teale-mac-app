@@ -79,6 +79,15 @@ public final class AppState {
     public var launchAtLogin: Bool = false
     public var maxStorageGB: Double = 50.0
     public var wanRelayURL: String = "wss://relay.teale.network/ws"
+    public var language: AppLanguage = AppLanguage(
+        rawValue: UserDefaults.standard.string(forKey: "teale.language") ?? "en"
+    ) ?? .english {
+        didSet { UserDefaults.standard.set(language.rawValue, forKey: "teale.language") }
+    }
+
+    public func loc(_ key: String) -> String {
+        L.string(key, language: language)
+    }
 
     public init() {
         let detector = HardwareDetector()

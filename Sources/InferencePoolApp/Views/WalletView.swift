@@ -34,7 +34,7 @@ struct WalletView: View {
             }
             .padding()
         }
-        .navigationTitle("Wallet")
+        .navigationTitle(appState.loc("wallet.title"))
     }
 }
 
@@ -45,7 +45,7 @@ private struct BalanceCard: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Text("Credit Balance")
+            Text(appState.loc("wallet.balance"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -53,7 +53,7 @@ private struct BalanceCard: View {
                 .font(.system(size: 36, weight: .bold, design: .rounded))
                 .foregroundStyle(.primary)
 
-            Text("credits")
+            Text(appState.loc("wallet.credits"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -80,7 +80,7 @@ private struct SendCreditsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Send Credits")
+            Text(appState.loc("wallet.sendCredits"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -88,7 +88,7 @@ private struct SendCreditsSection: View {
                 HStack(spacing: 6) {
                     Image(systemName: "network.slash")
                         .foregroundStyle(.secondary)
-                    Text("Connect to a cluster to send credits to peers")
+                    Text(appState.loc("wallet.connectCluster"))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -96,7 +96,7 @@ private struct SendCreditsSection: View {
             } else {
                 VStack(spacing: 8) {
                     Picker("To", selection: $selectedPeerID) {
-                        Text("Select peer...").tag(UUID?.none)
+                        Text(appState.loc("wallet.selectPeer")).tag(UUID?.none)
                         ForEach(connectedPeers) { peer in
                             Text(peer.name).tag(UUID?.some(peer.id))
                         }
@@ -104,11 +104,11 @@ private struct SendCreditsSection: View {
                     .pickerStyle(.menu)
 
                     HStack(spacing: 8) {
-                        TextField("Amount", text: $amountText)
+                        TextField(appState.loc("wallet.amount"), text: $amountText)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 80)
 
-                        TextField("Memo (optional)", text: $memo)
+                        TextField(appState.loc("wallet.memo"), text: $memo)
                             .textFieldStyle(.roundedBorder)
 
                         Button {
@@ -118,7 +118,7 @@ private struct SendCreditsSection: View {
                                 ProgressView()
                                     .controlSize(.small)
                             } else {
-                                Text("Send")
+                                Text(appState.loc("wallet.send"))
                             }
                         }
                         .buttonStyle(.borderedProminent)
@@ -186,26 +186,26 @@ private struct PricingGuideSection: View {
         [
             UsageExample(
                 emoji: "💬",
-                title: "Quick question",
-                detail: "A short back-and-forth conversation",
+                title: appState.loc("wallet.quickQuestion"),
+                detail: appState.loc("wallet.quickQuestionDetail"),
                 creditCost: "~0.5 credits"
             ),
             UsageExample(
                 emoji: "📝",
-                title: "Write an email or essay",
-                detail: "A few paragraphs of generated text",
+                title: appState.loc("wallet.writeEmail"),
+                detail: appState.loc("wallet.writeEmailDetail"),
                 creditCost: "~1-2 credits"
             ),
             UsageExample(
                 emoji: "💻",
-                title: "Help debug code",
-                detail: "Paste code, get an explanation and fix",
+                title: appState.loc("wallet.debugCode"),
+                detail: appState.loc("wallet.debugCodeDetail"),
                 creditCost: "~2-5 credits"
             ),
             UsageExample(
                 emoji: "📖",
-                title: "Summarize a long document",
-                detail: "Feed in pages of text, get a summary",
+                title: appState.loc("wallet.summarize"),
+                detail: appState.loc("wallet.summarizeDetail"),
                 creditCost: "~3-8 credits"
             ),
         ]
@@ -213,21 +213,21 @@ private struct PricingGuideSection: View {
 
     private var balanceSummary: String {
         if balance >= 100 {
-            return "You have plenty of credits for heavy daily use."
+            return appState.loc("wallet.balancePlenty")
         } else if balance >= 30 {
-            return "Enough for dozens of conversations."
+            return appState.loc("wallet.balanceGood")
         } else if balance >= 10 {
-            return "Good for several conversations today."
+            return appState.loc("wallet.balanceOk")
         } else if balance > 0 {
-            return "Running low — earn more by serving other nodes."
+            return appState.loc("wallet.balanceLow")
         } else {
-            return "No credits yet. Enable the cluster to start earning."
+            return appState.loc("wallet.balanceEmpty")
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("What Can Your Credits Buy?")
+            Text(appState.loc("wallet.whatCanBuy"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -261,7 +261,7 @@ private struct PricingGuideSection: View {
             .padding(.vertical, 4)
             .background(.blue.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
 
-            Text("Costs vary by model size — smaller models are cheaper, larger ones give better answers. You earn credits automatically when other devices use your Mac for inference.")
+            Text(appState.loc("wallet.pricingFooter"))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -275,7 +275,7 @@ private struct CreditSummarySection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Summary")
+            Text(appState.loc("wallet.summary"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -287,7 +287,7 @@ private struct CreditSummarySection: View {
                         Text(String(format: "%.2f", appState.wallet.totalEarned.value))
                             .font(.headline)
                     }
-                    Text("Earned")
+                    Text(appState.loc("wallet.earned"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -303,7 +303,7 @@ private struct CreditSummarySection: View {
                         Text(String(format: "%.2f", appState.wallet.totalSpent.value))
                             .font(.headline)
                     }
-                    Text("Spent")
+                    Text(appState.loc("wallet.spent"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -328,7 +328,7 @@ private struct TransactionsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Recent Transactions")
+                Text(appState.loc("wallet.recentTransactions"))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -342,7 +342,7 @@ private struct TransactionsSection: View {
                     Image(systemName: "clock")
                         .font(.title2)
                         .foregroundStyle(.secondary)
-                    Text("No transactions yet")
+                    Text(appState.loc("wallet.noTransactions"))
                         .foregroundStyle(.secondary)
                     Text("Start chatting or serve inference to see transactions here")
                         .font(.caption)
