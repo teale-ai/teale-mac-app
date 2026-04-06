@@ -15,8 +15,9 @@ public enum DownloadProgress: Sendable {
 
 // MARK: - Model Manager Service
 
+@MainActor
 @Observable
-public final class ModelManagerService: @unchecked Sendable {
+public final class ModelManagerService {
     public let catalog: ModelCatalog
     public let cache: ModelCache
     private let hardware: HardwareCapability
