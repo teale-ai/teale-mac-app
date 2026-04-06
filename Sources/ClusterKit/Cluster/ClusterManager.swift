@@ -33,7 +33,7 @@ public final class ClusterManager: @unchecked Sendable {
     private var heartbeatTask: Task<Void, Never>?
     private var healthCheckTask: Task<Void, Never>?
     private var scanStopTask: Task<Void, Never>?
-    private var connectingPeerIDs: Set<UUID> = []
+    private var connectingDiscoveryKeys: Set<String> = []
 
     // Model sharing
     private var modelQueryContinuation: AsyncStream<ModelQueryResult>.Continuation?
@@ -136,22 +136,13 @@ public final class ClusterManager: @unchecked Sendable {
     private func handlePeerDiscovered(endpoint: NWEndpoint, txtDict: [String: String]) async {
         guard let resolver = peerResolver else { return }
         Self.logger.info("handlePeerDiscovered endpoint=\(String(describing: endpoint), privacy: .public) txt=\(String(describing: txtDict), privacy: .public)")
-        guard let peerIDString = txtDict["deviceID"], let discoveredPeerID = UUID(uuidString: peerIDString) else {
-            Self.logger.error("Cluster discovery missing deviceID for \(String(describing: endpoint), privacy: .public)")
+        let discoveryKey = discoveryKey(for: endpoint, txtDict: txtDict)
+        guard !connectingDiscoveryKeys.contains(discoveryKey) else {
+            Self.logger.info("Skipping discovered endpoint \(discoveryKey, privacy: .public) because it is already connecting")
             return
         }
-        guard discoveredPeerID != localDeviceInfo.id else { return }
-        guard peers[discoveredPeerID] == nil, !connectingPeerIDs.contains(discoveredPeerID) else {
-            Self.logger.info("Skipping discovered peer \(discoveredPeerID.uuidString, privacy: .public) because it is already connected or connecting")
-            return
-        }
-        guard shouldInitiateOutboundConnection(to: discoveredPeerID) else {
-            Self.logger.info("Skipping outbound dial to \(discoveredPeerID.uuidString, privacy: .public); waiting for inbound")
-            return
-        }
-
-        connectingPeerIDs.insert(discoveredPeerID)
-        defer { connectingPeerIDs.remove(discoveredPeerID) }
+        connectingDiscoveryKeys.insert(discoveryKey)
+        defer { connectingDiscoveryKeys.remove(discoveryKey) }
 
         do {
             let peerInfo = try await resolver.resolve(endpoint: endpoint)
@@ -159,15 +150,8 @@ public final class ClusterManager: @unchecked Sendable {
                 await peerInfo.connection.cancel()
                 return
             }
-            if peerInfo.id != discoveredPeerID {
-                Self.logger.error("Cluster resolved deviceID mismatch for endpoint=\(String(describing: endpoint), privacy: .public) expected=\(discoveredPeerID.uuidString, privacy: .public) got=\(peerInfo.id.uuidString, privacy: .public)")
-                await peerInfo.connection.cancel()
-                return
-            }
             Self.logger.info("Resolved peer successfully: \(peerInfo.id.uuidString, privacy: .public)")
-            peers[peerInfo.id] = peerInfo
-            startListening(to: peerInfo)
-            updateState()
+            await registerResolvedPeer(peerInfo, origin: .outbound)
         } catch {
             Self.logger.error("Cluster resolve failed for endpoint=\(String(describing: endpoint), privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
@@ -188,23 +172,48 @@ public final class ClusterManager: @unchecked Sendable {
                 await peerInfo.connection.cancel()
                 return
             }
-            // Avoid duplicate connections
-            if peers[peerInfo.id] == nil {
-                Self.logger.info("Accepted incoming peer: \(peerInfo.id.uuidString, privacy: .public)")
-                peers[peerInfo.id] = peerInfo
-                startListening(to: peerInfo)
-                updateState()
-            } else {
-                Self.logger.info("Closing duplicate incoming peer: \(peerInfo.id.uuidString, privacy: .public)")
-                await peerInfo.connection.cancel()
-            }
+            await registerResolvedPeer(peerInfo, origin: .inbound)
         } catch {
             Self.logger.error("Cluster incoming connection failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    private func shouldInitiateOutboundConnection(to peerID: UUID) -> Bool {
-        localDeviceInfo.id.uuidString < peerID.uuidString
+    private enum ConnectionOrigin {
+        case outbound
+        case inbound
+    }
+
+    private func preferredOrigin(for peerID: UUID) -> ConnectionOrigin {
+        localDeviceInfo.id.uuidString < peerID.uuidString ? .outbound : .inbound
+    }
+
+    private func registerResolvedPeer(_ peerInfo: PeerInfo, origin: ConnectionOrigin) async {
+        if let existingPeer = peers[peerInfo.id] {
+            let preferredOrigin = preferredOrigin(for: peerInfo.id)
+            if origin == preferredOrigin {
+                Self.logger.info("Replacing existing peer \(peerInfo.id.uuidString, privacy: .public) with preferred \(String(describing: origin), privacy: .public) connection")
+                await existingPeer.connection.cancel()
+                peers[peerInfo.id] = peerInfo
+                startListening(to: peerInfo)
+                updateState()
+            } else {
+                Self.logger.info("Closing duplicate \(String(describing: origin), privacy: .public) connection for peer \(peerInfo.id.uuidString, privacy: .public)")
+                await peerInfo.connection.cancel()
+            }
+            return
+        }
+
+        Self.logger.info("Registered peer \(peerInfo.id.uuidString, privacy: .public) via \(String(describing: origin), privacy: .public)")
+        peers[peerInfo.id] = peerInfo
+        startListening(to: peerInfo)
+        updateState()
+    }
+
+    private func discoveryKey(for endpoint: NWEndpoint, txtDict: [String: String]) -> String {
+        if let deviceID = txtDict["deviceID"], !deviceID.isEmpty {
+            return "id:\(deviceID)"
+        }
+        return "endpoint:\(String(describing: endpoint))"
     }
 
     // MARK: - Message Handling

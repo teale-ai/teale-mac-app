@@ -15,7 +15,7 @@ public final class BonjourService: @unchecked Sendable {
     private var browser: NWBrowser?
     private let localDeviceID: UUID
     private let parameters: NWParameters
-    private var visiblePeerEndpoints: [UUID: NWEndpoint] = [:]
+    private var visiblePeerEndpoints: [String: NWEndpoint] = [:]
 
     public private(set) var isAdvertising: Bool = false
     public private(set) var isBrowsing: Bool = false
@@ -106,42 +106,40 @@ public final class BonjourService: @unchecked Sendable {
                 self.discoveredEndpoints = Array(results)
             }
 
-            var currentPeers: [UUID: (endpoint: NWEndpoint, txtDict: [String: String])] = [:]
+            var currentPeers: [String: (endpoint: NWEndpoint, txtDict: [String: String])] = [:]
             for result in results {
                 let txtDict = self.parseTXTRecord(result)
                 Self.logger.info("Result endpoint=\(String(describing: result.endpoint), privacy: .public) txt=\(String(describing: txtDict), privacy: .public)")
-                guard
-                    let deviceIDString = txtDict["deviceID"],
-                    let deviceID = UUID(uuidString: deviceIDString),
-                    deviceID != self.localDeviceID
-                else {
-                    if txtDict["deviceID"] == nil {
-                        Self.logger.info("Skipping result without deviceID: \(String(describing: result.endpoint), privacy: .public)")
-                    }
+                let peerKey = self.peerKey(for: result.endpoint, txtDict: txtDict)
+
+                // Skip obvious self results, but do not require TXT metadata just to discover.
+                if let deviceIDString = txtDict["deviceID"],
+                   let deviceID = UUID(uuidString: deviceIDString),
+                   deviceID == self.localDeviceID {
                     continue
                 }
 
                 // Bonjour can report the same peer on multiple interfaces. Keep the
-                // first visible endpoint per deviceID and dedupe the rest.
-                if currentPeers[deviceID] == nil {
-                    currentPeers[deviceID] = (result.endpoint, txtDict)
+                // first visible endpoint per peer key and dedupe the rest.
+                if currentPeers[peerKey] == nil {
+                    currentPeers[peerKey] = (result.endpoint, txtDict)
                 }
             }
 
-            let removedPeerIDs = Set(self.visiblePeerEndpoints.keys).subtracting(currentPeers.keys)
-            for peerID in removedPeerIDs {
-                if let endpoint = self.visiblePeerEndpoints.removeValue(forKey: peerID) {
-                    Self.logger.info("Peer removed from browse set: \(peerID.uuidString, privacy: .public) endpoint=\(String(describing: endpoint), privacy: .public)")
+            let removedPeerKeys = Set(self.visiblePeerEndpoints.keys).subtracting(currentPeers.keys)
+            for peerKey in removedPeerKeys {
+                if let endpoint = self.visiblePeerEndpoints.removeValue(forKey: peerKey) {
+                    Self.logger.info("Peer removed from browse set: \(peerKey, privacy: .public) endpoint=\(String(describing: endpoint), privacy: .public)")
                     self.onPeerRemoved?(endpoint)
                 }
             }
 
-            for (peerID, peer) in currentPeers {
-                if self.visiblePeerEndpoints[peerID] == nil {
-                    Self.logger.info("Peer discovered from browse set: \(peerID.uuidString, privacy: .public) endpoint=\(String(describing: peer.endpoint), privacy: .public)")
+            for (peerKey, peer) in currentPeers {
+                if self.visiblePeerEndpoints[peerKey] == nil {
+                    Self.logger.info("Peer discovered from browse set: \(peerKey, privacy: .public) endpoint=\(String(describing: peer.endpoint), privacy: .public)")
                     self.onPeerDiscovered?(peer.endpoint, peer.txtDict)
                 }
-                self.visiblePeerEndpoints[peerID] = peer.endpoint
+                self.visiblePeerEndpoints[peerKey] = peer.endpoint
             }
         }
 
@@ -173,6 +171,13 @@ public final class BonjourService: @unchecked Sendable {
             return txtRecord.toDictionary(knownKeys: ["deviceID", "chip", "ram", "version"])
         }
         return [:]
+    }
+
+    private func peerKey(for endpoint: NWEndpoint, txtDict: [String: String]) -> String {
+        if let deviceID = txtDict["deviceID"], !deviceID.isEmpty {
+            return "id:\(deviceID)"
+        }
+        return "endpoint:\(String(describing: endpoint))"
     }
 }
 
