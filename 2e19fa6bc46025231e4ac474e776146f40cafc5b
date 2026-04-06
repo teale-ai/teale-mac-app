@@ -1,0 +1,23 @@
+## What changed
+Three crash fixes across AuthKit, InferencePoolApp, and MLXInference:
+
+1. **Model loading crash (swift_task_dealloc)** — Sources/InferencePoolApp/AppState.swift:204-208
+   - Root cause: Progress callback from MLX's loadContainer created a new `Task { @MainActor }` per update. Rapid fire-and-forget unstructured task creation crashes Swift concurrency runtime when parent context completes.
+   - Fix: Replaced with `DispatchQueue.main.async` which dispatches without creating Swift concurrency tasks.
+
+2. **Startup crash (Bundle.module fatalError)** — Sources/AuthKit/SupabaseConfig.swift
+   - Root cause: `Bundle.module` (SwiftPM auto-generated) calls fatalError when the AuthKit resource bundle isn't embedded in the app package.
+   - Fix: Added `authKitBundle` computed property that manually probes for `AuthKit_AuthKit.bundle` in known locations, returning nil instead of crashing.
+
+3. **Force unwrap in login fallback** — Sources/InferencePoolApp/InferencePoolApp.swift:86
+   - Root cause: `appState.authManager!` crashes when Supabase isn't configured but `canUseApp == false`.
+   - Fix: Safe `if let` unwrap with fallback text view.
+
+## Impact
+- App no longer crashes during model loading or at startup without Supabase config
+- No behavioral changes to inference, networking, or UI beyond crash prevention
+
+## Files modified
+- Sources/InferencePoolApp/AppState.swift
+- Sources/AuthKit/SupabaseConfig.swift
+- Sources/InferencePoolApp/InferencePoolApp.swift
