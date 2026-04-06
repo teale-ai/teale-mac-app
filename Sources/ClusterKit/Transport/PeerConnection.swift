@@ -30,7 +30,9 @@ public actor PeerConnection {
         error: NWError?
     ) -> Bool {
         if error == nil {
-            return !isComplete
+            // For framed messages, receiveMessage() sets isComplete=true when a full
+            // message arrives. That is not a connection close signal.
+            return content != nil || !isComplete
         }
 
         switch error {
