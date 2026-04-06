@@ -11,22 +11,28 @@ enum ChatCompletionsRoute {
         let body = try await request.body.collect(upTo: 1_048_576)
         let chatRequest = try JSONDecoder().decode(ChatCompletionRequest.self, from: body)
 
-        guard await engine.loadedModel != nil else {
-            let error = APIErrorResponse(message: "No model loaded. Load a model first.", type: "invalid_request_error")
-            let data = try JSONEncoder().encode(error)
-            return Response(
-                status: .badRequest,
-                headers: [.contentType: "application/json"],
-                body: .init(byteBuffer: .init(data: data))
-            )
-        }
-
         let isStreaming = chatRequest.stream ?? false
 
-        if isStreaming {
-            return try await handleStreaming(request: chatRequest, engine: engine)
-        } else {
-            return try await handleNonStreaming(request: chatRequest, engine: engine)
+        do {
+            if isStreaming {
+                return try await handleStreaming(request: chatRequest, engine: engine)
+            } else {
+                return try await handleNonStreaming(request: chatRequest, engine: engine)
+            }
+        } catch {
+            if isNoModelAvailableError(error) {
+                let error = APIErrorResponse(
+                    message: "No model is available locally or on connected peers.",
+                    type: "invalid_request_error"
+                )
+                let data = try JSONEncoder().encode(error)
+                return Response(
+                    status: .badRequest,
+                    headers: [.contentType: "application/json"],
+                    body: .init(byteBuffer: .init(data: data))
+                )
+            }
+            throw error
         }
     }
 
@@ -74,5 +80,17 @@ enum ChatCompletionsRoute {
             ],
             body: responseBody
         )
+    }
+
+    private static func isNoModelAvailableError(_ error: Error) -> Bool {
+        let message: String
+        if let localizedError = error as? LocalizedError,
+           let description = localizedError.errorDescription {
+            message = description
+        } else {
+            message = error.localizedDescription
+        }
+
+        return message.localizedCaseInsensitiveContains("no model")
     }
 }

@@ -23,9 +23,10 @@ public final class ClusterManager: @unchecked Sendable {
     public var deviceName: String
     public var organizationID: String?
     public var orgCapacityReservation: Double = 0.6  // 0-1, default 60% reserved for org
+    public var authenticatedUserID: UUID?
 
     // Components
-    public let localDeviceInfo: DeviceInfo
+    public private(set) var localDeviceInfo: DeviceInfo
     private var bonjourService: BonjourService?
     private var peerResolver: PeerResolver?
     private let healthMonitor = PeerHealthMonitor()
@@ -44,12 +45,40 @@ public final class ClusterManager: @unchecked Sendable {
     public var localQueueDepth: Int = 0
 
     // Callbacks
-    public var onInferenceRequest: ((InferenceRequestPayload, PeerConnection) async -> Void)?
-    public var onCreditTransferReceived: ((CreditTransferPayload, PeerConnection) async -> Void)?
+    public var onInferenceRequest: ((InferenceRequestPayload, PeerInfo) async -> Void)?
+    public var onCreditTransferReceived: ((CreditTransferPayload, PeerInfo) async -> Void)?
 
     public init(localDeviceInfo: DeviceInfo) {
         self.localDeviceInfo = localDeviceInfo
         self.deviceName = localDeviceInfo.name
+    }
+
+    public func updateLocalLoadedModels(_ loadedModels: [String]) {
+        localDeviceInfo.loadedModels = loadedModels
+        Task { [weak self] in
+            await self?.sendHeartbeatNow()
+        }
+    }
+
+    public func updateAuthenticatedUserID(_ userID: UUID?) {
+        authenticatedUserID = userID
+        Task { [weak self] in
+            await self?.sendHeartbeatNow()
+        }
+    }
+
+    public func beginServingInference() {
+        localQueueDepth += 1
+        Task { [weak self] in
+            await self?.sendHeartbeatNow()
+        }
+    }
+
+    public func endServingInference() {
+        localQueueDepth = max(0, localQueueDepth - 1)
+        Task { [weak self] in
+            await self?.sendHeartbeatNow()
+        }
     }
 
     // MARK: - Enable/Disable
@@ -64,7 +93,12 @@ public final class ClusterManager: @unchecked Sendable {
         let parameters = NWParameters.clusterParameters(passcode: passcode, tlsManager: tlsManager)
 
         bonjourService = BonjourService(localDeviceID: localDeviceInfo.id, parameters: parameters)
-        peerResolver = PeerResolver(localDeviceInfo: localDeviceInfo, passcodeHash: passcodeHash, parameters: parameters)
+        peerResolver = PeerResolver(
+            localDeviceInfo: localDeviceInfo,
+            passcodeHash: passcodeHash,
+            parameters: parameters,
+            localOwnerUserID: authenticatedUserID
+        )
 
         // Handle discovered peers
         bonjourService?.onPeerDiscovered = { [weak self] endpoint, txtDict in
@@ -257,6 +291,7 @@ public final class ClusterManager: @unchecked Sendable {
             peer.throttleLevel = payload.throttleLevel
             peer.activeRequestCount = payload.queueDepth
             peer.organizationID = payload.organizationID
+            peer.ownerUserID = payload.ownerUserID
             if peer.status == .degraded {
                 peer.status = .connected
             }
@@ -274,7 +309,7 @@ public final class ClusterManager: @unchecked Sendable {
 
         case .inferenceRequest(let payload):
             // Delegate to the inference handler
-            await onInferenceRequest?(payload, peer.connection)
+            await onInferenceRequest?(payload, peer)
 
         case .inferenceChunk, .inferenceComplete, .inferenceError:
             // These are handled by the ClusterProvider waiting on specific requestIDs
@@ -315,7 +350,7 @@ public final class ClusterManager: @unchecked Sendable {
             break
 
         case .creditTransferRequest(let payload):
-            await onCreditTransferReceived?(payload, peer.connection)
+            await onCreditTransferReceived?(payload, peer)
 
         case .creditTransferConfirm:
             // Confirmation received — informational only (sender already debited)
@@ -330,20 +365,7 @@ public final class ClusterManager: @unchecked Sendable {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 guard let self = self else { return }
-
-                var heartbeat = await self.healthMonitor.makeHeartbeat(
-                    deviceID: self.localDeviceInfo.id,
-                    thermalLevel: .nominal,  // TODO: wire to actual throttler
-                    throttleLevel: 100,
-                    loadedModels: self.localDeviceInfo.loadedModels,
-                    isGenerating: false,
-                    queueDepth: self.localQueueDepth
-                )
-                heartbeat.organizationID = self.organizationID
-
-                for (_, peer) in self.peers where peer.status == .connected || peer.status == .degraded {
-                    try? await peer.connection.send(.heartbeat(heartbeat))
-                }
+                await self.sendHeartbeatNow()
             }
         }
     }
@@ -382,6 +404,25 @@ public final class ClusterManager: @unchecked Sendable {
     private func updateState() {
         topology.update(peers: Array(peers.values))
         clusterState = topology.toClusterState(isEnabled: isEnabled)
+    }
+
+    private func sendHeartbeatNow() async {
+        guard isEnabled else { return }
+
+        var heartbeat = await healthMonitor.makeHeartbeat(
+            deviceID: localDeviceInfo.id,
+            thermalLevel: .nominal,  // TODO: wire to actual throttler
+            throttleLevel: 100,
+            loadedModels: localDeviceInfo.loadedModels,
+            isGenerating: localQueueDepth > 0,
+            queueDepth: localQueueDepth
+        )
+        heartbeat.organizationID = organizationID
+        heartbeat.ownerUserID = authenticatedUserID
+
+        for (_, peer) in peers where peer.status == .connected || peer.status == .degraded {
+            try? await peer.connection.send(.heartbeat(heartbeat))
+        }
     }
 
     /// Get summaries of all peers for UI

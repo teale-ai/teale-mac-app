@@ -59,6 +59,86 @@ public final class CreditWallet: @unchecked Sendable {
         await refreshBalance()
     }
 
+    public func recordTransferDebit(
+        amount: CreditAmount,
+        toPeer peerNodeID: String,
+        description: String,
+        modelID: String? = nil,
+        tokenCount: Int? = nil
+    ) async {
+        guard let ledger = ledger else { return }
+        let transaction = CreditTransaction(
+            type: .transfer,
+            amount: amount,
+            description: description,
+            peerNodeID: peerNodeID,
+            modelID: modelID,
+            tokenCount: tokenCount
+        )
+        await ledger.debit(amount: amount, transaction: transaction)
+        await refreshBalance()
+    }
+
+    public func recordTransferCredit(
+        amount: CreditAmount,
+        fromPeer peerNodeID: String,
+        description: String,
+        modelID: String? = nil,
+        tokenCount: Int? = nil
+    ) async {
+        guard let ledger = ledger else { return }
+        let transaction = CreditTransaction(
+            type: .transfer,
+            amount: amount,
+            description: description,
+            peerNodeID: peerNodeID,
+            modelID: modelID,
+            tokenCount: tokenCount
+        )
+        await ledger.credit(amount: amount, transaction: transaction)
+        await refreshBalance()
+    }
+
+    public func recordAdjustmentCredit(
+        amount: CreditAmount,
+        description: String,
+        peerNodeID: String? = nil,
+        modelID: String? = nil,
+        tokenCount: Int? = nil
+    ) async {
+        guard let ledger = ledger else { return }
+        let transaction = CreditTransaction(
+            type: .adjustment,
+            amount: amount,
+            description: description,
+            peerNodeID: peerNodeID,
+            modelID: modelID,
+            tokenCount: tokenCount
+        )
+        await ledger.credit(amount: amount, transaction: transaction)
+        await refreshBalance()
+    }
+
+    public func recordAdjustmentDebit(
+        amount: CreditAmount,
+        description: String,
+        peerNodeID: String? = nil,
+        modelID: String? = nil,
+        tokenCount: Int? = nil
+    ) async {
+        guard let ledger = ledger else { return }
+        let transaction = CreditTransaction(
+            type: .adjustment,
+            amount: amount,
+            description: description,
+            peerNodeID: peerNodeID,
+            modelID: modelID,
+            tokenCount: tokenCount
+        )
+        await ledger.debit(amount: amount, transaction: transaction)
+        await refreshBalance()
+    }
+
     /// Debit wallet for an outgoing P2P credit transfer. Returns true if balance was sufficient.
     public func sendTransfer(amount: Double, toPeer peerNodeID: String, memo: String? = nil) async -> Bool {
         guard let ledger = ledger else { return false }
@@ -68,31 +148,16 @@ public final class CreditWallet: @unchecked Sendable {
 
         let desc = memo.map { "Sent \(String(format: "%.2f", amount)) credits: \($0)" }
             ?? "Sent \(String(format: "%.2f", amount)) credits"
-        let transaction = CreditTransaction(
-            type: .transfer,
-            amount: creditAmount,
-            description: desc,
-            peerNodeID: peerNodeID
-        )
-        await ledger.debit(amount: creditAmount, transaction: transaction)
-        await refreshBalance()
+        await recordTransferDebit(amount: creditAmount, toPeer: peerNodeID, description: desc)
         return true
     }
 
     /// Credit wallet for an incoming P2P credit transfer.
     public func receiveTransfer(amount: Double, fromPeer peerNodeID: String, memo: String? = nil) async {
-        guard let ledger = ledger else { return }
         let creditAmount = CreditAmount(amount)
         let desc = memo.map { "Received \(String(format: "%.2f", amount)) credits: \($0)" }
             ?? "Received \(String(format: "%.2f", amount)) credits"
-        let transaction = CreditTransaction(
-            type: .transfer,
-            amount: creditAmount,
-            description: desc,
-            peerNodeID: peerNodeID
-        )
-        await ledger.credit(amount: creditAmount, transaction: transaction)
-        await refreshBalance()
+        await recordTransferCredit(amount: creditAmount, fromPeer: peerNodeID, description: desc)
     }
 
     /// Get current balance asynchronously (safe from any context).

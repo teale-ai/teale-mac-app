@@ -123,6 +123,20 @@ public final class AppState {
         L.string(key, language: language)
     }
 
+    public var hasAvailableInferenceTarget: Bool {
+        if case .ready = engineStatus {
+            return true
+        }
+
+        guard clusterEnabled else {
+            return false
+        }
+
+        return clusterManager.topology.connectedPeers.contains {
+            !$0.isGenerating && $0.throttleLevel > 0 && !$0.loadedModels.isEmpty
+        }
+    }
+
     public init() {
         let detector = HardwareDetector()
         let hw = detector.detect()
@@ -138,6 +152,27 @@ public final class AppState {
         let deviceInfo = DeviceInfo(name: hostname, hardware: hw)
         self.clusterManager = ClusterManager(localDeviceInfo: deviceInfo)
         self.wanManager = WANManager()
+        self.clusterManager.onInferenceRequest = { [clusterManager, mlxProvider] payload, peer in
+            clusterManager.beginServingInference()
+            defer { clusterManager.endServingInference() }
+
+            do {
+                let stream = mlxProvider.generate(request: payload.request)
+                for try await chunk in stream {
+                    let response = InferenceChunkPayload(requestID: payload.requestID, chunk: chunk)
+                    try await peer.connection.send(.inferenceChunk(response))
+                }
+
+                let complete = InferenceCompletePayload(requestID: payload.requestID)
+                try await peer.connection.send(.inferenceComplete(complete))
+            } catch {
+                let response = InferenceErrorPayload(
+                    requestID: payload.requestID,
+                    errorMessage: error.localizedDescription
+                )
+                try? await peer.connection.send(.inferenceError(response))
+            }
+        }
         if let config = SupabaseConfig.default {
             self.authManager = AuthManager(config: config)
         } else {
@@ -163,6 +198,7 @@ public final class AppState {
             authManager.deviceHardware = (chipName: hardware.chipName, ramGB: Int(hardware.totalRAMGB))
             authManager.wanNodeID = nodeID
             await authManager.checkSession()
+            clusterManager.updateAuthenticatedUserID(authManager.currentUser?.id)
         }
 
         // Initialize credit wallet
@@ -196,14 +232,46 @@ public final class AppState {
         await agentManager.setup(profile: profile, creditBalance: realWallet.balance.value)
 
         // Wire credit transfer handling
-        clusterManager.onCreditTransferReceived = { [weak self] payload, connection in
+        clusterManager.onCreditTransferReceived = { [weak self] payload, peer in
             guard let self = self else { return }
-            await self.wallet.receiveTransfer(amount: payload.amount, fromPeer: payload.senderNodeID, memo: payload.memo)
+            let amount = CreditAmount(payload.amount)
+            let senderName = payload.senderDeviceName ?? peer.deviceInfo.name
+            let modelID = payload.modelID
+            let tokenCount = payload.tokenCount
+
+            let description: String
+            if let tokenCount, let modelName = self.resolveModelDescriptor(for: modelID)?.name {
+                description = "Received \(String(format: "%.2f", payload.amount)) credits from \(senderName) for \(tokenCount) tokens of \(modelName)"
+            } else if let memo = payload.memo {
+                description = "Received \(String(format: "%.2f", payload.amount)) credits from \(senderName): \(memo)"
+            } else {
+                description = "Received \(String(format: "%.2f", payload.amount)) credits from \(senderName)"
+            }
+
+            await self.wallet.recordTransferCredit(
+                amount: amount,
+                fromPeer: payload.senderNodeID,
+                description: description,
+                modelID: modelID,
+                tokenCount: tokenCount
+            )
+
+            if self.isInferenceSettlement(payload) && self.isSameOwner(peer: peer) {
+                let refundDescription = "Refunded internal LAN inference receipt for \(senderName) (same account)"
+                await self.wallet.recordAdjustmentDebit(
+                    amount: amount,
+                    description: refundDescription,
+                    peerNodeID: payload.senderNodeID,
+                    modelID: modelID,
+                    tokenCount: tokenCount
+                )
+            }
+
             let confirm = CreditTransferConfirmPayload(
                 transferID: payload.transferID,
                 receiverNodeID: self.clusterManager.localDeviceInfo.id.uuidString
             )
-            try? await connection.send(.creditTransferConfirm(confirm))
+            try? await peer.connection.send(.creditTransferConfirm(confirm))
         }
     }
 
@@ -265,11 +333,13 @@ public final class AppState {
             loadingPhase = ""
             loadingProgress = nil
             engineStatus = .ready(descriptor)
+            syncAdvertisedLoadedModels()
             await refreshDownloadedModels()
         } catch {
             loadingPhase = ""
             loadingProgress = nil
             engineStatus = .error(error.localizedDescription)
+            syncAdvertisedLoadedModels()
         }
     }
 
@@ -287,6 +357,7 @@ public final class AppState {
         await engine.unloadModel()
         selectedModel = nil
         engineStatus = .idle
+        syncAdvertisedLoadedModels()
     }
 
     public func startServer() async {
@@ -305,6 +376,7 @@ public final class AppState {
 
     public func refreshStatus() async {
         engineStatus = await engine.status
+        syncAdvertisedLoadedModels()
     }
 
     /// Send credits to a connected peer
@@ -314,7 +386,8 @@ public final class AppState {
         guard success else { return false }
 
         let payload = CreditTransferPayload(
-            senderNodeID: clusterManager.localDeviceInfo.id.uuidString,
+            senderNodeID: Self.stableNodeID(),
+            senderDeviceName: ProcessInfo.processInfo.hostName,
             amount: amount,
             memo: memo
         )
@@ -337,12 +410,20 @@ public final class AppState {
     }
 
     private func enableCluster() {
-        let clusterProvider = ClusterProvider(localProvider: localProvider, clusterManager: clusterManager)
+        let clusterProvider = ClusterProvider(
+            localProvider: localProvider,
+            clusterManager: clusterManager,
+            onRemoteGenerationCompleted: { [weak self] record in
+                await self?.recordRemoteInferenceSettlement(record)
+            }
+        )
         Task {
             await engine.setProvider(clusterProvider)
         }
         modelManager.peerModelSource = clusterManager
+        clusterManager.updateAuthenticatedUserID(authManager?.currentUser?.id)
         clusterManager.enable()
+        syncAdvertisedLoadedModels()
         clusterManager.scanForPeers()
     }
 
@@ -351,6 +432,106 @@ public final class AppState {
         modelManager.peerModelSource = nil
         Task {
             await engine.setProvider(localProvider)
+        }
+    }
+
+    private func syncAdvertisedLoadedModels() {
+        let loadedModels: [String]
+        switch engineStatus {
+        case .ready(let descriptor):
+            loadedModels = [descriptor.huggingFaceRepo]
+        default:
+            loadedModels = []
+        }
+
+        clusterManager.updateLocalLoadedModels(loadedModels)
+    }
+
+    private func recordRemoteInferenceSettlement(_ record: ClusterProvider.RemoteGenerationRecord) async {
+        guard let model = resolveModelDescriptor(for: record.modelID) else {
+            return
+        }
+
+        let amount = CreditPricing.cost(tokenCount: record.tokenCount, model: model)
+        let peerNodeID = record.peer.id.uuidString
+        let sameOwner = isSameOwner(peer: record.peer)
+        let requesterNodeID = Self.stableNodeID()
+        let requesterName = ProcessInfo.processInfo.hostName
+        let memo = "LAN inference settlement for \(record.tokenCount) tokens of \(model.name)"
+        let payload = CreditTransferPayload(
+            senderNodeID: requesterNodeID,
+            senderDeviceName: requesterName,
+            amount: amount.value,
+            memo: memo,
+            modelID: model.id,
+            tokenCount: record.tokenCount
+        )
+
+        do {
+            try await clusterManager.sendCreditTransfer(to: record.peer.id, payload: payload)
+        } catch {
+            return
+        }
+
+        let transferDescription = "Sent \(String(format: "%.2f", amount.value)) credits to \(record.peer.deviceInfo.name) for \(record.tokenCount) tokens of \(model.name)"
+        await wallet.recordTransferDebit(
+            amount: amount,
+            toPeer: peerNodeID,
+            description: transferDescription,
+            modelID: model.id,
+            tokenCount: record.tokenCount
+        )
+
+        if sameOwner {
+            let refundDescription = "Refunded internal LAN inference settlement with \(record.peer.deviceInfo.name) (same account)"
+            await wallet.recordAdjustmentCredit(
+                amount: amount,
+                description: refundDescription,
+                peerNodeID: peerNodeID,
+                modelID: model.id,
+                tokenCount: record.tokenCount
+            )
+        }
+    }
+
+    private func resolveModelDescriptor(for modelID: String?) -> ModelDescriptor? {
+        guard let modelID, !modelID.isEmpty else {
+            return nil
+        }
+
+        return ModelCatalog.allModels.first {
+            $0.id == modelID || $0.huggingFaceRepo == modelID || $0.name == modelID
+        }
+    }
+
+    private func isInferenceSettlement(_ payload: CreditTransferPayload) -> Bool {
+        payload.modelID != nil || payload.tokenCount != nil
+    }
+
+    private func isSameOwner(peer: PeerInfo) -> Bool {
+        guard let authManager, let currentUser = authManager.currentUser else {
+            return false
+        }
+
+        if let ownerUserID = peer.ownerUserID {
+            return ownerUserID == currentUser.id
+        }
+
+        return authManager.devices.contains { device in
+            guard device.userID == currentUser.id else { return false }
+            guard device.deviceName == peer.deviceInfo.name else { return false }
+
+            if let chipName = device.chipName,
+               chipName != peer.deviceInfo.hardware.chipName {
+                return false
+            }
+
+            if let ramGB = device.ramGB,
+               ramGB != Int(peer.deviceInfo.hardware.totalRAMGB) {
+                return false
+            }
+
+            return true
         }
     }
 
