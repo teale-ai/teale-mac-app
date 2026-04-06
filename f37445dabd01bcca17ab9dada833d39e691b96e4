@@ -1,0 +1,19 @@
+## What changed
+Added missing macOS permissions required for Bonjour/mDNS LAN cluster discovery.
+
+The ClusterKit module uses NWBrowser/NWListener with service type `_teale._tcp` for peer discovery, but the app bundle was missing the declarations macOS requires to allow this.
+
+### Sources/InferencePoolApp/Info.plist
+- Added `NSLocalNetworkUsageDescription` — privacy string shown when macOS prompts for local network access
+- Added `NSBonjourServices` array with `_teale._tcp` — declares the Bonjour service type the app advertises/browses
+
+### Sources/InferencePoolApp/InferencePool.entitlements
+- Added `com.apple.developer.networking.multicast` — required for mDNS multicast traffic used by Bonjour
+
+## Why
+Two Macs on the same WiFi couldn't see each other in the Cluster view. The app had basic network.client/network.server entitlements but lacked Bonjour-specific permissions, so macOS silently blocked discovery.
+
+## Impact
+- Both machines need to rebuild with these changes for discovery to work
+- Users will see a "Teale wants to find devices on your local network" prompt on first launch — must allow
+- No code changes, only plist/entitlements configuration
