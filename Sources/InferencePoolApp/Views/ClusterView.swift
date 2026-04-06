@@ -75,6 +75,10 @@ struct ClusterView: View {
             .padding()
         }
         .navigationTitle("Cluster")
+        .onAppear {
+            guard appState.clusterEnabled else { return }
+            appState.clusterManager.scanForPeers()
+        }
     }
 }
 
@@ -95,11 +99,11 @@ private struct DiscoveryControlsView: View {
                 }
                 .buttonStyle(.bordered)
             } else {
-                Text("Discovery is manual. Teale stays available for inbound LAN connections.")
+                Text("Teale scans briefly when Cluster turns on or when this screen opens.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Search for Devices") {
+                Button("Scan Again") {
                     appState.clusterManager.scanForPeers()
                 }
                 .buttonStyle(.borderedProminent)

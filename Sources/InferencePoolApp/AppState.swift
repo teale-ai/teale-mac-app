@@ -308,6 +308,7 @@ public final class AppState {
         }
         modelManager.peerModelSource = clusterManager
         clusterManager.enable()
+        clusterManager.scanForPeers()
     }
 
     private func disableCluster() {
