@@ -10,6 +10,7 @@ import HardwareProfile
 public final class ClusterManager: @unchecked Sendable {
     // State
     public private(set) var isEnabled: Bool = false
+    public private(set) var isScanning: Bool = false
     public private(set) var peers: [UUID: PeerInfo] = [:]
     public private(set) var topology: ClusterTopology = ClusterTopology()
     public private(set) var clusterState: ClusterState = ClusterState()
@@ -29,6 +30,7 @@ public final class ClusterManager: @unchecked Sendable {
     private let tlsManager = ClusterTLSManager()
     private var heartbeatTask: Task<Void, Never>?
     private var healthCheckTask: Task<Void, Never>?
+    private var scanStopTask: Task<Void, Never>?
 
     // Model sharing
     private var modelQueryContinuation: AsyncStream<ModelQueryResult>.Continuation?
@@ -73,9 +75,8 @@ public final class ClusterManager: @unchecked Sendable {
             Task { await self?.handleIncomingConnection(connection) }
         }
 
-        // Start advertising and browsing
+        // Start advertising only. Browsing is triggered manually from the UI.
         try? bonjourService?.startAdvertising(deviceInfo: localDeviceInfo)
-        bonjourService?.startBrowsing()
 
         // Start heartbeat and health check loops
         startHeartbeatLoop()
@@ -91,6 +92,7 @@ public final class ClusterManager: @unchecked Sendable {
         bonjourService?.stop()
         bonjourService = nil
         peerResolver = nil
+        stopScanning()
 
         heartbeatTask?.cancel()
         healthCheckTask?.cancel()
@@ -102,6 +104,28 @@ public final class ClusterManager: @unchecked Sendable {
         peers.removeAll()
 
         updateState()
+    }
+
+    public func scanForPeers(duration: Duration = .seconds(10)) {
+        guard isEnabled, bonjourService != nil else { return }
+
+        scanStopTask?.cancel()
+        bonjourService?.stopBrowsing()
+        bonjourService?.startBrowsing()
+        isScanning = true
+
+        scanStopTask = Task { [weak self] in
+            try? await Task.sleep(for: duration)
+            guard !Task.isCancelled else { return }
+            self?.stopScanning()
+        }
+    }
+
+    public func stopScanning() {
+        scanStopTask?.cancel()
+        scanStopTask = nil
+        bonjourService?.stopBrowsing()
+        isScanning = false
     }
 
     // MARK: - Peer Management

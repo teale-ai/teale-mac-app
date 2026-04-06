@@ -29,17 +29,24 @@ struct ClusterView: View {
                     // This device
                     ThisDeviceCard()
 
+                    DiscoveryControlsView()
+
                     // Peer devices
                     if appState.clusterManager.peerSummaries.isEmpty {
                         VStack(spacing: 8) {
-                            Image(systemName: "magnifyingglass")
+                            Image(systemName: appState.clusterManager.isScanning ? "magnifyingglass" : "desktopcomputer")
                                 .font(.largeTitle)
                                 .foregroundStyle(.secondary)
-                            Text("Searching for devices on your network...")
+                            Text(appState.clusterManager.isScanning ? "Scanning your network..." : "No connected devices yet")
                                 .foregroundStyle(.secondary)
-                            Text("Run Teale on another Mac on the same network")
+                            Text(
+                                appState.clusterManager.isScanning
+                                ? "Looking for nearby Macs running Teale"
+                                : "Teale is available on this Mac and waiting for nearby devices to connect"
+                            )
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
+                                .multilineTextAlignment(.center)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 24)
@@ -68,6 +75,36 @@ struct ClusterView: View {
             .padding()
         }
         .navigationTitle("Cluster")
+    }
+}
+
+private struct DiscoveryControlsView: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if appState.clusterManager.isScanning {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Scanning for devices...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Stop") {
+                    appState.clusterManager.stopScanning()
+                }
+                .buttonStyle(.bordered)
+            } else {
+                Text("Discovery is manual. Teale stays available for inbound LAN connections.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Search for Devices") {
+                    appState.clusterManager.scanForPeers()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
     }
 }
 

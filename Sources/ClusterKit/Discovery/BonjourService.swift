@@ -72,6 +72,8 @@ public final class BonjourService: @unchecked Sendable {
     // MARK: - Browse
 
     public func startBrowsing() {
+        guard browser == nil else { return }
+
         let browserDescriptor = NWBrowser.Descriptor.bonjour(type: Self.serviceType, domain: nil)
         // NWBrowser must use minimal parameters — TLS and custom framers prevent mDNS discovery.
         // Connection-level parameters (TLS, framer) are applied later when connecting to a peer.
@@ -118,16 +120,20 @@ public final class BonjourService: @unchecked Sendable {
         self.browser = browser
     }
 
+    public func stopBrowsing() {
+        browser?.cancel()
+        browser = nil
+        isBrowsing = false
+        discoveredEndpoints = []
+    }
+
     // MARK: - Stop
 
     public func stop() {
         listener?.cancel()
-        browser?.cancel()
         listener = nil
-        browser = nil
+        stopBrowsing()
         isAdvertising = false
-        isBrowsing = false
-        discoveredEndpoints = []
     }
 
     // MARK: - Helpers
