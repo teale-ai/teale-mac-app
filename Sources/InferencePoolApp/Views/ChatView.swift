@@ -11,7 +11,7 @@ struct ChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             // No model banner
-            if !hasModelLoaded {
+            if !hasInferenceTarget {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
@@ -67,7 +67,7 @@ struct ChatView: View {
                             Text(appState.loc("chat.startConversation"))
                                 .font(.title3)
                                 .foregroundStyle(.secondary)
-                            if hasModelLoaded {
+                            if hasInferenceTarget {
                                 Text(appState.loc("chat.typeBelow"))
                                     .font(.caption)
                                     .foregroundStyle(.tertiary)
@@ -125,9 +125,8 @@ struct ChatView: View {
         }
     }
 
-    private var hasModelLoaded: Bool {
-        if case .ready = appState.engineStatus { return true }
-        return false
+    private var hasInferenceTarget: Bool {
+        appState.hasAvailableInferenceTarget
     }
 
     private var canSend: Bool {
@@ -151,7 +150,7 @@ struct ChatView: View {
     }
 
     private func generateResponse(for conversation: Conversation) async {
-        guard hasModelLoaded else {
+        guard hasInferenceTarget else {
             let _ = appState.conversationStore.addMessage(to: conversation, role: "assistant", content: appState.loc("chat.noModelResponse"))
             return
         }
