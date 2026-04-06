@@ -36,7 +36,7 @@ public actor ClusterTLSManager {
 
     public init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        self.trustStorePath = appSupport.appendingPathComponent("InferencePool/trusted_peers.json")
+        self.trustStorePath = appSupport.appendingPathComponent("Teale/trusted_peers.json")
     }
 
     // MARK: - Key Management

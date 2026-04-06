@@ -6,6 +6,7 @@ import WANKit
 import CreditKit
 import LocalAPI
 import InferenceEngine
+import AuthKit
 
 struct SettingsView: View {
     @Environment(AppState.self) private var appState
@@ -13,7 +14,7 @@ struct SettingsView: View {
     @State private var maxStorage: Double = 50.0
     @State private var apiPort: String = "11435"
     @State private var clusterPasscode: String = ""
-    @State private var wanRelayURL: String = "wss://relay.solair.network/ws"
+    @State private var wanRelayURL: String = "wss://relay.teale.network/ws"
     @State private var apiKeys: [APIKey] = []
     @State private var newKeyName: String = "Default"
     @State private var generatedKey: String?
@@ -23,6 +24,34 @@ struct SettingsView: View {
         @Bindable var state = appState
 
         Form {
+            // Account
+            Section("Account") {
+                if case .signedIn(let user) = appState.authManager.authState {
+                    if let phone = user.phone {
+                        LabeledContent("Phone", value: phone)
+                    }
+                    if let email = user.email {
+                        LabeledContent("Email", value: email)
+                    }
+                    LabeledContent("Devices", value: "\(appState.authManager.devices.count)")
+                    Button("Sign Out") {
+                        Task { await appState.authManager.signOut() }
+                    }
+                } else {
+                    HStack {
+                        Image(systemName: "person.crop.circle.badge.questionmark")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Not signed in")
+                                .font(.subheadline)
+                            Text("Sign in to sync devices and back up your wallet")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+
             // General
             Section("General") {
                 Toggle("Launch at Login", isOn: $launchAtLogin)
@@ -128,7 +157,7 @@ struct SettingsView: View {
                 }
 
                 Button("Copy for Terminal") {
-                    let activeKey = apiKeys.first(where: { $0.isActive })?.key ?? "sk-solair-YOUR_KEY_HERE"
+                    let activeKey = apiKeys.first(where: { $0.isActive })?.key ?? "sk-teale-YOUR_KEY_HERE"
                     let snippet = """
                     export OPENAI_API_BASE=http://localhost:\(appState.serverPort)/v1
                     export OPENAI_API_KEY=\(activeKey)
@@ -252,12 +281,12 @@ struct SettingsView: View {
             Section("About") {
                 LabeledContent("Version", value: "0.1.0")
                 LabeledContent("Engine", value: "MLX")
-                Link("Source Code", destination: URL(string: "https://github.com/inference-pool")!)
+                Link("Source Code", destination: URL(string: "https://github.com/taylorhou/teale")!)
             }
 
             // Quit
             Section {
-                Button("Quit Inference Pool", role: .destructive) {
+                Button("Quit Teale", role: .destructive) {
                     NSApplication.shared.terminate(nil)
                 }
             }

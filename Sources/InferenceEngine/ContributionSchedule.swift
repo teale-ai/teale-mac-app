@@ -106,7 +106,7 @@ public struct ContributionSchedule: Codable, Sendable {
 
     private static var fileURL: URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return appSupport.appendingPathComponent("InferencePool/contribution_schedule.json")
+        return appSupport.appendingPathComponent("Teale/contribution_schedule.json")
     }
 
     public func save() {

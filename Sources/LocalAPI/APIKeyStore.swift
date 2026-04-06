@@ -19,7 +19,7 @@ public struct APIKey: Codable, Sendable, Identifiable {
         self.isActive = isActive
     }
 
-    /// Display-safe truncated key (e.g. "sk-solair-abc1...f9e2")
+    /// Display-safe truncated key (e.g. "sk-teale-abc1...f9e2")
     public var truncatedKey: String {
         guard key.count > 20 else { return key }
         let prefix = key.prefix(14)
@@ -36,14 +36,14 @@ public actor APIKeyStore {
 
     public init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        self.fileURL = appSupport.appendingPathComponent("InferencePool/api_keys.json")
+        self.fileURL = appSupport.appendingPathComponent("Teale/api_keys.json")
         self.keys = Self.loadFromDisk(fileURL)
     }
 
     /// Generate a new API key
     public func generateKey(name: String) -> APIKey {
         let hex = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
-        let key = APIKey(key: "sk-solair-\(hex)", name: name)
+        let key = APIKey(key: "sk-teale-\(hex)", name: name)
         keys.append(key)
         saveToDisk()
         return key

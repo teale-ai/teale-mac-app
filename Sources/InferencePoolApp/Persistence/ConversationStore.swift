@@ -9,7 +9,7 @@ public final class ConversationStore {
 
     private var storageDirectory: URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return appSupport.appendingPathComponent("InferencePool/conversations", isDirectory: true)
+        return appSupport.appendingPathComponent("Teale/conversations", isDirectory: true)
     }
 
     public init() {

@@ -13,7 +13,7 @@ public final class NetworkMonitor: @unchecked Sendable {
     /// True when connected via Wi-Fi (not cellular/hotspot)
     public var isOnWiFi: Bool { isConnected && !isExpensive }
     private let monitor = NWPathMonitor()
-    private let queue = DispatchQueue(label: "com.inferencepool.network-monitor")
+    private let queue = DispatchQueue(label: "com.teale.network-monitor")
 
     public init() {
         startMonitoring()

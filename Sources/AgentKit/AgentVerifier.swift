@@ -12,7 +12,7 @@ public actor AgentVerifier {
     public init(storePath: URL? = nil) {
         self.storePath = storePath ?? {
             let home = FileManager.default.homeDirectoryForCurrentUser
-            return home.appendingPathComponent(".solair/agent_trusted_keys.json")
+            return home.appendingPathComponent(".teale/agent_trusted_keys.json")
         }()
     }
 

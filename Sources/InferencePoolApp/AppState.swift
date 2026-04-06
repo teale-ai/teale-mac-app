@@ -9,6 +9,7 @@ import ClusterKit
 import WANKit
 import CreditKit
 import AgentKit
+import AuthKit
 
 // MARK: - App State
 
@@ -43,6 +44,9 @@ public final class AppState {
     // Credits
     public var wallet: CreditWallet
 
+    // Auth
+    public let authManager: AuthManager
+
     // Agent
     public let agentManager: AgentManager
     public var agentProfile: AgentProfile?
@@ -63,7 +67,7 @@ public final class AppState {
     // Settings
     public var launchAtLogin: Bool = false
     public var maxStorageGB: Double = 50.0
-    public var wanRelayURL: String = "wss://relay.solair.network/ws"
+    public var wanRelayURL: String = "wss://relay.teale.network/ws"
 
     public init() {
         let detector = HardwareDetector()
@@ -80,14 +84,21 @@ public final class AppState {
         let deviceInfo = DeviceInfo(name: hostname, hardware: hw)
         self.clusterManager = ClusterManager(localDeviceInfo: deviceInfo)
         self.wanManager = WANManager()
+        self.authManager = AuthManager(config: .default)
         self.agentManager = AgentManager()
 
         // Wallet placeholder — replaced async on launch
         self.wallet = CreditWallet.placeholder()
     }
 
-    /// Call once at app launch to initialize async components (credit ledger, agent)
+    /// Call once at app launch to initialize async components (auth, credit ledger, agent)
     public func initializeAsync() async {
+        // Check auth session
+        await authManager.checkSession()
+
+        // Pass device hardware info for registration
+        authManager.deviceHardware = (chipName: hardware.chipName, ramGB: Int(hardware.totalRAMGB))
+
         // Initialize credit wallet
         let ledger = await CreditLedger()
         await ledger.applyWelcomeBonusIfNeeded()
@@ -102,6 +113,12 @@ public final class AppState {
             nodeID = identity.nodeID
         } else {
             nodeID = UUID().uuidString
+        }
+
+        // Link WAN identity to auth device record
+        authManager.wanNodeID = nodeID
+        if authManager.authState.isAuthenticated {
+            await authManager.fetchDevices()
         }
 
         let profile = AgentProfile(
@@ -280,5 +297,6 @@ public enum AppView: Hashable {
     case wan
     case wallet
     case agents
+    case devices
     case settings
 }

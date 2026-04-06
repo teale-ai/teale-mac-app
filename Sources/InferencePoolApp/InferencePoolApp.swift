@@ -8,6 +8,7 @@ import ClusterKit
 import WANKit
 import CreditKit
 import AgentKit
+import AuthKit
 
 // MARK: - Main App Entry
 
@@ -26,8 +27,11 @@ struct InferencePoolApp: App {
             ContentView()
                 .environment(appState)
                 .frame(width: 480, height: 600)
+                .onOpenURL { url in
+                    Task { await appState.authManager.handleOAuthCallback(url: url) }
+                }
         } label: {
-            Label("Inference Pool", systemImage: "brain.head.profile")
+            Label("Teale", systemImage: "brain.head.profile")
         }
         .menuBarExtraStyle(.window)
     }
@@ -39,31 +43,41 @@ struct ContentView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        NavigationSplitView {
-            SidebarView()
-        } detail: {
-            switch appState.currentView {
-            case .dashboard:
-                DashboardView()
-            case .chat:
-                ChatView()
-            case .models:
-                ModelBrowserView()
-            case .cluster:
-                ClusterView()
-            case .wan:
-                WANView()
-            case .wallet:
-                WalletView()
-            case .agents:
-                AgentView()
-            case .settings:
-                SettingsView()
+        Group {
+            if appState.authManager.authState.canUseApp {
+                NavigationSplitView {
+                    SidebarView()
+                } detail: {
+                    switch appState.currentView {
+                    case .dashboard:
+                        DashboardView()
+                    case .chat:
+                        ChatView()
+                    case .models:
+                        ModelBrowserView()
+                    case .cluster:
+                        ClusterView()
+                    case .wan:
+                        WANView()
+                    case .wallet:
+                        WalletView()
+                    case .agents:
+                        AgentView()
+                    case .devices:
+                        DevicesView(authManager: appState.authManager)
+                    case .settings:
+                        SettingsView()
+                    }
+                }
+            } else {
+                LoginView(authManager: appState.authManager)
             }
         }
         .task {
             await appState.initializeAsync()
-            await appState.startServer()
+            if appState.authManager.authState.canUseApp {
+                await appState.startServer()
+            }
         }
     }
 }
@@ -94,6 +108,10 @@ struct SidebarView: View {
             Section {
                 Label("Wallet", systemImage: "creditcard")
                     .tag(AppView.wallet)
+                if appState.authManager.authState.isAuthenticated {
+                    Label("Devices", systemImage: "laptopcomputer.and.iphone")
+                        .tag(AppView.devices)
+                }
                 Label("Settings", systemImage: "gear")
                     .tag(AppView.settings)
             }

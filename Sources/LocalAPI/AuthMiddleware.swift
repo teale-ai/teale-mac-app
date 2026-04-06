@@ -34,7 +34,7 @@ public struct AuthMiddleware<Context: RequestContext>: RouterMiddleware {
 
         // No auth header present
         if requireAuth {
-            return unauthorizedResponse(message: "API key required. Set Authorization: Bearer sk-solair-...")
+            return unauthorizedResponse(message: "API key required. Set Authorization: Bearer sk-teale-...")
         }
 
         // No auth required (localhost mode) — pass through

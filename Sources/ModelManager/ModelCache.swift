@@ -14,7 +14,7 @@ public actor ModelCache {
 
     public static func defaultCacheDirectory() -> URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return appSupport.appendingPathComponent("InferencePool/Models", isDirectory: true)
+        return appSupport.appendingPathComponent("Teale/Models", isDirectory: true)
     }
 
     /// Ensure the cache directory exists
