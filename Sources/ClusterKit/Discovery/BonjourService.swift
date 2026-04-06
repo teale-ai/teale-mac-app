@@ -73,7 +73,11 @@ public final class BonjourService: @unchecked Sendable {
 
     public func startBrowsing() {
         let browserDescriptor = NWBrowser.Descriptor.bonjour(type: Self.serviceType, domain: nil)
-        let browser = NWBrowser(for: browserDescriptor, using: parameters)
+        // NWBrowser must use minimal parameters — TLS and custom framers prevent mDNS discovery.
+        // Connection-level parameters (TLS, framer) are applied later when connecting to a peer.
+        let browseParams = NWParameters()
+        browseParams.includePeerToPeer = true
+        let browser = NWBrowser(for: browserDescriptor, using: browseParams)
 
         browser.stateUpdateHandler = { [weak self] state in
             DispatchQueue.main.async {
