@@ -285,8 +285,26 @@ public final class AuthManager {
             let id: UUID
         }
 
+        struct DeviceUpdate: Encodable {
+            let last_seen: String
+            let device_name: String
+            let chip_name: String?
+            let ram_gb: Int?
+            let wan_node_id: String?
+            let is_active: Bool
+        }
+
         do {
-            // Check if this device is already registered (match by wan_node_id or name+platform)
+            let update = DeviceUpdate(
+                last_seen: ISO8601DateFormatter().string(from: Date()),
+                device_name: deviceName,
+                chip_name: deviceHardware?.chipName,
+                ram_gb: deviceHardware?.ramGB,
+                wan_node_id: wanNodeID,
+                is_active: true
+            )
+
+            // Check if this device is already registered by stable node ID first.
             if let nodeID = wanNodeID {
                 let existing: [DeviceResponse] = try await client.from("devices")
                     .select("id")
@@ -296,26 +314,33 @@ public final class AuthManager {
                     .value
 
                 if let device = existing.first {
-                    // Update existing device
                     currentDeviceID = device.id
-
-                    struct DeviceUpdate: Encodable {
-                        let last_seen: String
-                        let device_name: String
-                        let is_active: Bool
-                    }
-
-                    let update = DeviceUpdate(
-                        last_seen: ISO8601DateFormatter().string(from: Date()),
-                        device_name: deviceName,
-                        is_active: true
-                    )
                     _ = try? await client.from("devices")
                         .update(update)
                         .eq("id", value: device.id.uuidString)
                         .execute()
                     return
                 }
+            }
+
+            // Fallback for device rows created before a stable node ID existed.
+            let existingByName: [DeviceResponse] = try await client.from("devices")
+                .select("id")
+                .eq("user_id", value: user.id.uuidString)
+                .eq("device_name", value: deviceName)
+                .eq("platform", value: platform.rawValue)
+                .eq("is_active", value: true)
+                .order("last_seen", ascending: false)
+                .execute()
+                .value
+
+            if let device = existingByName.first {
+                currentDeviceID = device.id
+                _ = try? await client.from("devices")
+                    .update(update)
+                    .eq("id", value: device.id.uuidString)
+                    .execute()
+                return
             }
 
             // Register new device
@@ -359,7 +384,7 @@ public final class AuthManager {
                 .value
 
             let formatter = ISO8601DateFormatter()
-            devices = rows.map { row in
+            let mapped = rows.map { row in
                 DeviceRecord(
                     id: row.id,
                     userID: row.user_id,
@@ -373,9 +398,47 @@ public final class AuthManager {
                     isActive: row.is_active
                 )
             }
+
+            devices = deduplicateDevices(mapped)
         } catch {
             // Non-fatal
         }
+    }
+
+    private func deduplicateDevices(_ rows: [DeviceRecord]) -> [DeviceRecord] {
+        var deduped: [String: DeviceRecord] = [:]
+
+        for device in rows {
+            let key = deviceIdentityKey(for: device)
+            if let existing = deduped[key], existing.lastSeen >= device.lastSeen {
+                continue
+            }
+            deduped[key] = device
+        }
+
+        return deduped.values.sorted { $0.lastSeen > $1.lastSeen }
+    }
+
+    private func deviceIdentityKey(for device: DeviceRecord) -> String {
+        let deviceName = device.deviceName.lowercased()
+
+        if let chip = normalized(device.chipName)?.lowercased(),
+           let ramGB = device.ramGB {
+            return "hardware:\(deviceName)|\(device.platform.rawValue)|\(chip)|\(ramGB)"
+        }
+
+        if let wanNodeID = normalized(device.wanNodeID) {
+            return "wan:\(deviceName)|\(device.platform.rawValue)|\(wanNodeID)"
+        }
+
+        return "fallback:\(deviceName)|\(device.platform.rawValue)"
+    }
+
+    private func normalized(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 
     /// Remove a device from the account (soft delete).

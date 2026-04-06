@@ -16,6 +16,8 @@ import AuthKit
 @MainActor
 @Observable
 public final class AppState {
+    private static let stableNodeIDKey = "teale.stable_node_id"
+
     // Hardware
     public let hardware: HardwareCapability
     public let throttler: AdaptiveThrottler
@@ -108,11 +110,13 @@ public final class AppState {
     public func initializeAsync() async {
         // Scan which models are already downloaded
         await refreshDownloadedModels()
+        let nodeID = Self.stableNodeID()
 
         // Check auth session (skip if Supabase not configured)
         if let authManager {
-            await authManager.checkSession()
             authManager.deviceHardware = (chipName: hardware.chipName, ramGB: Int(hardware.totalRAMGB))
+            authManager.wanNodeID = nodeID
+            await authManager.checkSession()
         }
 
         // Initialize credit wallet
@@ -122,18 +126,9 @@ public final class AppState {
         await realWallet.refreshBalance()
         self.wallet = realWallet
 
-        // Initialize agent profile — use a random node ID to avoid Keychain prompt on launch.
+        // Initialize agent profile with a stable local node ID.
         // WANNodeIdentity is created lazily when WAN is actually enabled.
         let hostname = ProcessInfo.processInfo.hostName
-        let nodeID = UUID().uuidString
-
-        // Link WAN identity to auth device record
-        if let authManager {
-            authManager.wanNodeID = nodeID
-            if authManager.authState.isAuthenticated {
-                await authManager.fetchDevices()
-            }
-        }
 
         let profile = AgentProfile(
             nodeID: nodeID,
@@ -164,6 +159,16 @@ public final class AppState {
             )
             try? await connection.send(.creditTransferConfirm(confirm))
         }
+    }
+
+    private static func stableNodeID() -> String {
+        if let existing = UserDefaults.standard.string(forKey: stableNodeIDKey), !existing.isEmpty {
+            return existing
+        }
+
+        let nodeID = UUID().uuidString
+        UserDefaults.standard.set(nodeID, forKey: stableNodeIDKey)
+        return nodeID
     }
 
     // MARK: - Actions
