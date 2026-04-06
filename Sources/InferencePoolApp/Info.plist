@@ -28,6 +28,12 @@
 	<string></string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Teale uses your local network to discover and connect to other Macs running Teale for distributed AI inference.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_teale._tcp</string>
+	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
