@@ -186,6 +186,9 @@ struct SettingsView: View {
                 VStack(alignment: .leading) {
                     Text(String(format: appState.loc("settings.maxStorage"), Int(maxStorage)))
                     Slider(value: $maxStorage, in: 5...200, step: 5)
+                        .onChange(of: maxStorage) { _, newValue in
+                            appState.maxStorageGB = newValue
+                        }
                 }
             }
 

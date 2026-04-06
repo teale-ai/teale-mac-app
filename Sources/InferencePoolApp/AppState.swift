@@ -77,7 +77,9 @@ public final class AppState {
 
     // Settings
     public var launchAtLogin: Bool = false
-    public var maxStorageGB: Double = 50.0
+    public var maxStorageGB: Double = UserDefaults.standard.object(forKey: "teale.maxStorageGB") as? Double ?? 50.0 {
+        didSet { UserDefaults.standard.set(maxStorageGB, forKey: "teale.maxStorageGB") }
+    }
     public var wanRelayURL: String = "wss://relay.teale.network/ws"
     public var language: AppLanguage = AppLanguage(
         rawValue: UserDefaults.standard.string(forKey: "teale.language") ?? "en"
