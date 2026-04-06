@@ -16,6 +16,7 @@ public final class ClusterManager: @unchecked Sendable {
     public private(set) var peers: [UUID: PeerInfo] = [:]
     public private(set) var topology: ClusterTopology = ClusterTopology()
     public private(set) var clusterState: ClusterState = ClusterState()
+    public private(set) var connectionNotice: String?
 
     // Configuration
     public var passcode: String?
@@ -59,6 +60,7 @@ public final class ClusterManager: @unchecked Sendable {
 
         let passcodeHash = passcode.map { ClusterSecurity.hashPasscode($0) }
         self.organizationID = passcodeHash  // Nodes with same passcode form an org
+        connectionNotice = nil
         let parameters = NWParameters.clusterParameters(passcode: passcode, tlsManager: tlsManager)
 
         bonjourService = BonjourService(localDeviceID: localDeviceInfo.id, parameters: parameters)
@@ -96,6 +98,7 @@ public final class ClusterManager: @unchecked Sendable {
         bonjourService = nil
         peerResolver = nil
         stopScanning()
+        connectionNotice = nil
 
         heartbeatTask?.cancel()
         healthCheckTask?.cancel()
@@ -116,6 +119,7 @@ public final class ClusterManager: @unchecked Sendable {
         bonjourService?.stopBrowsing()
         bonjourService?.startBrowsing()
         isScanning = true
+        connectionNotice = nil
 
         scanStopTask = Task { [weak self] in
             try? await Task.sleep(for: duration)
@@ -151,8 +155,10 @@ public final class ClusterManager: @unchecked Sendable {
                 return
             }
             Self.logger.info("Resolved peer successfully: \(peerInfo.id.uuidString, privacy: .public)")
+            connectionNotice = nil
             await registerResolvedPeer(peerInfo, origin: .outbound)
         } catch {
+            connectionNotice = connectionNotice(for: error)
             Self.logger.error("Cluster resolve failed for endpoint=\(String(describing: endpoint), privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
     }
@@ -172,8 +178,10 @@ public final class ClusterManager: @unchecked Sendable {
                 await peerInfo.connection.cancel()
                 return
             }
+            connectionNotice = nil
             await registerResolvedPeer(peerInfo, origin: .inbound)
         } catch {
+            connectionNotice = connectionNotice(for: error)
             Self.logger.error("Cluster incoming connection failed: \(error.localizedDescription, privacy: .public)")
         }
     }
@@ -207,6 +215,15 @@ public final class ClusterManager: @unchecked Sendable {
         peers[peerInfo.id] = peerInfo
         startListening(to: peerInfo)
         updateState()
+    }
+
+    private func connectionNotice(for error: Error) -> String {
+        if let resolverError = error as? PeerResolverError,
+           resolverError == .localNetworkPermissionDenied {
+            return "Local Network access is blocked for Teale on this Mac. Enable it in System Settings > Privacy & Security > Local Network on both Macs, then relaunch Teale."
+        }
+
+        return "Teale found a nearby service but could not connect. On macOS, verify Local Network access is enabled for Teale in System Settings > Privacy & Security > Local Network on both Macs."
     }
 
     private func discoveryKey(for endpoint: NWEndpoint, txtDict: [String: String]) -> String {

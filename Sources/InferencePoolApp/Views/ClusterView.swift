@@ -31,6 +31,19 @@ struct ClusterView: View {
 
                     DiscoveryControlsView()
 
+                    if let connectionNotice = appState.clusterManager.connectionNotice {
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.yellow)
+                            Text(connectionNotice)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(12)
+                        .background(.quaternary.opacity(0.6))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+
                     // Peer devices
                     if appState.clusterManager.peerSummaries.isEmpty {
                         VStack(spacing: 8) {
@@ -63,7 +76,7 @@ struct ClusterView: View {
                         Text("Enable LAN Cluster to connect your Macs into a unified inference network")
                             .multilineTextAlignment(.center)
                             .foregroundStyle(.secondary)
-                        Text("Devices on the same network will automatically discover each other")
+                        Text("Devices on the same network can discover each other when Local Network access is allowed")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .multilineTextAlignment(.center)

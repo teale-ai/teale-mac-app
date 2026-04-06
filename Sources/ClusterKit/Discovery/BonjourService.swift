@@ -14,6 +14,7 @@ public final class BonjourService: @unchecked Sendable {
     private var listener: NWListener?
     private var browser: NWBrowser?
     private let localDeviceID: UUID
+    private let localServiceNames: Set<String>
     private let parameters: NWParameters
     private var visiblePeerEndpoints: [String: NWEndpoint] = [:]
 
@@ -30,6 +31,7 @@ public final class BonjourService: @unchecked Sendable {
 
     public init(localDeviceID: UUID, parameters: NWParameters = .clusterParameters()) {
         self.localDeviceID = localDeviceID
+        self.localServiceNames = Self.makeLocalServiceNames()
         self.parameters = parameters
     }
 
@@ -112,10 +114,11 @@ public final class BonjourService: @unchecked Sendable {
                 Self.logger.info("Result endpoint=\(String(describing: result.endpoint), privacy: .public) txt=\(String(describing: txtDict), privacy: .public)")
                 let peerKey = self.peerKey(for: result.endpoint, txtDict: txtDict)
 
-                // Skip obvious self results, but do not require TXT metadata just to discover.
-                if let deviceIDString = txtDict["deviceID"],
-                   let deviceID = UUID(uuidString: deviceIDString),
-                   deviceID == self.localDeviceID {
+                // NWBrowser sometimes omits Bonjour TXT metadata even when the service
+                // is advertising it correctly. Fall back to the local service name so
+                // we do not waste scans repeatedly connecting to ourselves.
+                if self.isLikelySelfEndpoint(result.endpoint, txtDict: txtDict) {
+                    Self.logger.info("Skipping self endpoint=\(String(describing: result.endpoint), privacy: .public)")
                     continue
                 }
 
@@ -171,6 +174,44 @@ public final class BonjourService: @unchecked Sendable {
             return txtRecord.toDictionary(knownKeys: ["deviceID", "chip", "ram", "version"])
         }
         return [:]
+    }
+
+    private static func makeLocalServiceNames() -> Set<String> {
+        var names: Set<String> = []
+
+        if let localizedName = Host.current().localizedName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !localizedName.isEmpty {
+            names.insert(localizedName)
+        }
+
+        let hostName = ProcessInfo.processInfo.hostName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !hostName.isEmpty {
+            names.insert(hostName)
+            names.insert(hostName.replacingOccurrences(of: ".local", with: ""))
+        }
+
+        return names
+    }
+
+    private func isLikelySelfEndpoint(_ endpoint: NWEndpoint, txtDict: [String: String]) -> Bool {
+        if let deviceIDString = txtDict["deviceID"],
+           let deviceID = UUID(uuidString: deviceIDString),
+           deviceID == localDeviceID {
+            return true
+        }
+
+        guard let serviceName = serviceName(from: endpoint) else {
+            return false
+        }
+
+        return localServiceNames.contains(serviceName)
+    }
+
+    private func serviceName(from endpoint: NWEndpoint) -> String? {
+        guard case let .service(name: name, type: _, domain: _, interface: _) = endpoint else {
+            return nil
+        }
+        return name
     }
 
     private func peerKey(for endpoint: NWEndpoint, txtDict: [String: String]) -> String {

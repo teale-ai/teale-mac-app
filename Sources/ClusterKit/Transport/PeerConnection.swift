@@ -1,15 +1,18 @@
 import Foundation
 import Network
+import OSLog
 
 // MARK: - Peer Connection
 
 /// Wraps NWConnection to provide typed async message send/receive
 public actor PeerConnection {
+    private static let logger = Logger(subsystem: "com.teale.app", category: "ClusterTransport")
     public let connection: NWConnection
     public let peerID: UUID?
     private var messageContinuation: AsyncStream<ClusterMessage>.Continuation?
     private var _incomingMessages: AsyncStream<ClusterMessage>?
     public private(set) var isReady: Bool = false
+    public private(set) var localNetworkDenied: Bool = false
 
     public init(connection: NWConnection, peerID: UUID? = nil) {
         self.connection = connection
@@ -101,11 +104,26 @@ public actor PeerConnection {
     // MARK: - Private
 
     private func handleStateChange(_ state: NWConnection.State) {
+        if let currentPath = connection.currentPath,
+           currentPath.unsatisfiedReason == .localNetworkDenied {
+            localNetworkDenied = true
+        }
+
         switch state {
         case .ready:
             isReady = true
+            Self.logger.info("Connection ready endpoint=\(String(describing: self.connection.endpoint), privacy: .public)")
+        case .waiting(let error):
+            Self.logger.error(
+                "Connection waiting endpoint=\(String(describing: self.connection.endpoint), privacy: .public) error=\(error.localizedDescription, privacy: .public) reason=\(String(describing: self.connection.currentPath?.unsatisfiedReason), privacy: .public)"
+            )
         case .failed, .cancelled:
             isReady = false
+            if case .failed(let error) = state {
+                Self.logger.error(
+                    "Connection failed endpoint=\(String(describing: self.connection.endpoint), privacy: .public) error=\(error.localizedDescription, privacy: .public) reason=\(String(describing: self.connection.currentPath?.unsatisfiedReason), privacy: .public)"
+                )
+            }
             messageContinuation?.finish()
         default:
             break
@@ -116,6 +134,11 @@ public actor PeerConnection {
         // Wait up to 10 seconds for connection to be ready
         for _ in 0..<100 {
             if isReady { return }
+            if let currentPath = connection.currentPath,
+               currentPath.unsatisfiedReason == .localNetworkDenied {
+                localNetworkDenied = true
+                return
+            }
             try? await Task.sleep(for: .milliseconds(100))
         }
     }
