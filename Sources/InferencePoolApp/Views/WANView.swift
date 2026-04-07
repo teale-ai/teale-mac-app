@@ -26,6 +26,11 @@ struct WANView: View {
 
                     Divider()
 
+                    // Discoverable peers
+                    WANDiscoveredPeersSection()
+
+                    Divider()
+
                     // Connected WAN Peers
                     WANPeersSection()
                 } else {
@@ -138,6 +143,50 @@ private struct WANPeersSection: View {
     }
 }
 
+private struct WANDiscoveredPeersSection: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        let peers = appState.wanManager.state.discoveredPeers
+
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Discoverable Peers")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Refresh") {
+                    Task {
+                        try? await appState.wanManager.refreshDiscovery()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            if peers.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "dot.radiowaves.left.and.right")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                    Text("No discoverable WAN peers yet")
+                        .foregroundStyle(.secondary)
+                    Text("Once another Teale node registers with the relay, connect to it here.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+            } else {
+                ForEach(peers) { peer in
+                    WANDiscoveredPeerCard(peer: peer)
+                }
+            }
+        }
+    }
+}
+
 // MARK: - WAN Peer Card
 
 private struct WANPeerCard: View {
@@ -182,6 +231,52 @@ private struct WANPeerCard: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct WANDiscoveredPeerCard: View {
+    @Environment(AppState.self) private var appState
+    let peer: WANPeerInfo
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "globe.badge.chevron.backward")
+                .font(.title2)
+                .foregroundStyle(.teal)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(peer.displayName)
+                    .font(.body.bold())
+
+                HStack(spacing: 8) {
+                    Text(peer.capabilities.hardware.chipName)
+                    Text("\(Int(peer.capabilities.hardware.totalRAMGB)) GB")
+                    Text(peer.natType.displayName)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                if !peer.capabilities.loadedModels.isEmpty {
+                    Text("Models: \(peer.capabilities.loadedModels.joined(separator: ", "))")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            Button("Connect") {
+                Task {
+                    try? await appState.wanManager.connectToPeer(nodeID: peer.nodeID)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
         }
         .padding(12)
         .background(.quaternary.opacity(0.5))

@@ -17,6 +17,8 @@ struct SettingsView: View {
     @State private var clusterPasscode: String = ""
     @State private var wanRelayURL: String = "wss://relay.teale.network/ws"
     @State private var orgReservation: Double = 60
+    @State private var exoBaseURL: String = "http://localhost:52415"
+    @State private var exoPreferredModelID: String = ""
 
     var body: some View {
         @Bindable var state = appState
@@ -95,6 +97,70 @@ struct SettingsView: View {
                 Text(appState.loc("settings.keepAwakeHelp"))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+            }
+
+            Section("Inference Backend") {
+                Picker("Backend", selection: $state.inferenceBackend) {
+                    ForEach(InferenceBackend.allCases) { backend in
+                        Text(backend.displayName).tag(backend)
+                    }
+                }
+
+                if appState.inferenceBackend == .exo {
+                    HStack {
+                        Text("Exo URL")
+                        TextField("http://localhost:52415", text: $exoBaseURL)
+                            .textFieldStyle(.roundedBorder)
+                    }
+
+                    HStack {
+                        Text("Preferred Model")
+                        TextField("Optional model ID", text: $exoPreferredModelID)
+                            .textFieldStyle(.roundedBorder)
+                    }
+
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(appState.engineStatus.isReady ? .green : .orange)
+                            .frame(width: 8, height: 8)
+                        Text(appState.exoStatusMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if !appState.exoRunningModels.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Running in Exo")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Text(appState.exoRunningModels.joined(separator: ", "))
+                                .font(.caption)
+                                .textSelection(.enabled)
+                        }
+                    }
+
+                    if !appState.exoAvailableModels.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Available via Exo")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Text(appState.exoAvailableModels.prefix(8).joined(separator: ", "))
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .textSelection(.enabled)
+                        }
+                    }
+
+                    Button("Apply Exo Settings") {
+                        applyExoSettings()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+
+                    Text("Teale will proxy inference through Exo on this Mac. Start and shard the model in Exo itself, then use Teale for chat, credits, and peer routing.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
 
             // Connect Your Agent
@@ -253,7 +319,7 @@ struct SettingsView: View {
             // About
             Section(appState.loc("settings.about")) {
                 LabeledContent(appState.loc("settings.version"), value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")
-                LabeledContent(appState.loc("settings.engine"), value: "MLX")
+                LabeledContent(appState.loc("settings.engine"), value: appState.inferenceEngineName)
                 Link(appState.loc("settings.sourceCode"), destination: URL(string: "https://github.com/taylorhou/teale-mac-app")!)
             }
 
@@ -270,6 +336,9 @@ struct SettingsView: View {
             maxStorage = appState.maxStorageGB
             apiPort = String(appState.serverPort)
             orgReservation = appState.clusterManager.orgCapacityReservation * 100
+            wanRelayURL = appState.wanRelayURL
+            exoBaseURL = appState.exoBaseURL
+            exoPreferredModelID = appState.exoPreferredModelID
         }
     }
 
@@ -292,6 +361,12 @@ struct SettingsView: View {
         } catch {
             launchAtLogin = !enabled
         }
+    }
+
+    private func applyExoSettings() {
+        appState.exoBaseURL = exoBaseURL
+        appState.exoPreferredModelID = exoPreferredModelID
+        Task { await appState.refreshStatus() }
     }
 }
 

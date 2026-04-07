@@ -61,6 +61,7 @@ public actor WANProvider: InferenceProvider {
         continuation: AsyncThrowingStream<ChatCompletionChunk, Error>.Continuation
     ) async throws {
         let localModel = await localProvider.loadedModel
+        let localModelID = localModel?.huggingFaceRepo
         let requestedModel = request.model
 
         // If WAN is not enabled, always use local
@@ -85,19 +86,34 @@ public actor WANProvider: InferenceProvider {
             return
         }
 
-        // Try to find a WAN peer with the requested model
-        if let requestedModel = requestedModel,
-           let connection = wanManager.connectionForPeer(withModel: requestedModel) {
+        // If there is no explicit request model, prefer local if we already have a model loaded.
+        if requestedModel == nil, localModelID != nil {
+            let stream = localProvider.generate(request: request)
+            for try await chunk in stream {
+                continuation.yield(chunk)
+            }
+            continuation.finish()
+            return
+        }
+
+        // Otherwise route to a connected WAN peer if one is serving a suitable model.
+        if let peer = wanManager.connectedPeerForInference(preferredModel: requestedModel) {
             do {
+                var proxiedRequest = request
+                proxiedRequest.model = proxiedRequest.model ?? peer.peerInfo.capabilities.loadedModels.first
                 try await generateRemote(
-                    request: request,
-                    connection: connection,
+                    request: proxiedRequest,
+                    connection: peer.connection,
                     continuation: continuation
                 )
                 return
             } catch {
                 // WAN peer failed, fall through to local
             }
+        }
+
+        if localModelID == nil {
+            throw WANError.noWANPeerAvailable
         }
 
         // Fall back to local provider
@@ -122,11 +138,9 @@ public actor WANProvider: InferenceProvider {
             streaming: true
         )
 
-        // Send request
-        try await connection.send(.inferenceRequest(payload))
-
-        // Listen for response with timeout
+        // Subscribe before sending so a fast peer cannot race the reply past us.
         let messages = await connection.incomingMessages
+        try await connection.send(.inferenceRequest(payload))
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             // Timeout task
