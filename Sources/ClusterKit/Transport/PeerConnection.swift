@@ -9,8 +9,7 @@ public actor PeerConnection {
     private static let logger = Logger(subsystem: "com.teale.app", category: "ClusterTransport")
     public let connection: NWConnection
     public let peerID: UUID?
-    private var messageContinuation: AsyncStream<ClusterMessage>.Continuation?
-    private var _incomingMessages: AsyncStream<ClusterMessage>?
+    private var messageSubscribers: [UUID: AsyncStream<ClusterMessage>.Continuation] = [:]
     public private(set) var isReady: Bool = false
     public private(set) var localNetworkDenied: Bool = false
 
@@ -51,10 +50,6 @@ public actor PeerConnection {
 
     /// Start the connection and begin receiving messages
     public func start() async {
-        let (stream, continuation) = AsyncStream<ClusterMessage>.makeStream()
-        self.messageContinuation = continuation
-        self._incomingMessages = stream
-
         connection.stateUpdateHandler = { [weak self] state in
             Task { await self?.handleStateChange(state) }
         }
@@ -67,11 +62,13 @@ public actor PeerConnection {
     /// Incoming messages as an async stream
     public var incomingMessages: AsyncStream<ClusterMessage> {
         get async {
-            if let stream = _incomingMessages {
-                return stream
+            let subscriberID = UUID()
+            return AsyncStream { continuation in
+                Task { await self.addSubscriber(continuation, id: subscriberID) }
+                continuation.onTermination = { [weak self] _ in
+                    Task { await self?.removeSubscriber(id: subscriberID) }
+                }
             }
-            // Create and return an empty stream if not started
-            return AsyncStream { $0.finish() }
         }
     }
 
@@ -98,7 +95,7 @@ public actor PeerConnection {
     /// Cancel the connection
     public func cancel() {
         connection.cancel()
-        messageContinuation?.finish()
+        finishAllSubscribers()
     }
 
     // MARK: - Private
@@ -124,7 +121,7 @@ public actor PeerConnection {
                     "Connection failed endpoint=\(String(describing: self.connection.endpoint), privacy: .public) error=\(error.localizedDescription, privacy: .public) reason=\(String(describing: self.connection.currentPath?.unsatisfiedReason), privacy: .public)"
                 )
             }
-            messageContinuation?.finish()
+            finishAllSubscribers()
         default:
             break
         }
@@ -161,6 +158,26 @@ public actor PeerConnection {
     }
 
     private func deliverMessage(_ message: ClusterMessage) {
-        messageContinuation?.yield(message)
+        for continuation in messageSubscribers.values {
+            continuation.yield(message)
+        }
+    }
+
+    private func addSubscriber(
+        _ continuation: AsyncStream<ClusterMessage>.Continuation,
+        id: UUID
+    ) async {
+        messageSubscribers[id] = continuation
+    }
+
+    private func removeSubscriber(id: UUID) async {
+        messageSubscribers.removeValue(forKey: id)
+    }
+
+    private func finishAllSubscribers() {
+        for continuation in messageSubscribers.values {
+            continuation.finish()
+        }
+        messageSubscribers.removeAll()
     }
 }

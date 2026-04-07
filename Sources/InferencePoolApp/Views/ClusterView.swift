@@ -203,6 +203,7 @@ private struct ThisDeviceCard: View {
 // MARK: - Peer Card
 
 struct PeerCardView: View {
+    @Environment(AppState.self) private var appState
     let peer: PeerSummary
 
     var body: some View {
@@ -241,6 +242,12 @@ struct PeerCardView: View {
                 Text(peer.status.rawValue.capitalized)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                Button(appState.loc("wallet.sendCredits")) {
+                    appState.pendingWalletTransferPeerID = peer.id
+                    appState.currentView = .wallet
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
         }
         .padding(12)

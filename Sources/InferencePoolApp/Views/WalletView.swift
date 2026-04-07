@@ -134,6 +134,12 @@ private struct SendCreditsSection: View {
                 }
             }
         }
+        .onAppear {
+            applyPendingPeerSelection()
+        }
+        .onChange(of: connectedPeers.map(\.id)) {
+            applyPendingPeerSelection()
+        }
     }
 
     private var canSend: Bool {
@@ -161,6 +167,19 @@ private struct SendCreditsSection: View {
                     resultMessage = "Failed — insufficient balance or peer unreachable"
                 }
             }
+        }
+    }
+
+    private func applyPendingPeerSelection() {
+        if let pendingPeerID = appState.pendingWalletTransferPeerID,
+           connectedPeers.contains(where: { $0.id == pendingPeerID }) {
+            selectedPeerID = pendingPeerID
+            appState.pendingWalletTransferPeerID = nil
+            return
+        }
+
+        if selectedPeerID == nil, connectedPeers.count == 1 {
+            selectedPeerID = connectedPeers[0].id
         }
     }
 }

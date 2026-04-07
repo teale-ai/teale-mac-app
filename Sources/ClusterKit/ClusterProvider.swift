@@ -126,11 +126,10 @@ public actor ClusterProvider: InferenceProvider {
         var tokenCount = 0
         var modelID = request.model
 
-        // Send request to peer
+        // Subscribe before sending so a fast peer cannot race the reply past us.
+        let messages = await peer.connection.incomingMessages
         try await peer.connection.send(.inferenceRequest(payload))
 
-        // Listen for response chunks
-        let messages = await peer.connection.incomingMessages
         for await message in messages {
             switch message {
             case .inferenceChunk(let chunkPayload) where chunkPayload.requestID == requestID:

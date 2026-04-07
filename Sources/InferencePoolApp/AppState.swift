@@ -76,6 +76,7 @@ public final class AppState {
     public var showSignIn: Bool = false
     public var loadingPhase: String = ""
     public var loadingProgress: Double?
+    public var pendingWalletTransferPeerID: UUID?
 
     // Settings
     public var launchAtLogin: Bool = false
