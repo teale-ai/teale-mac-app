@@ -79,6 +79,14 @@ public actor WANDiscoveryService {
         self.config = config
     }
 
+    public func setCallbacks(
+        onPeerDiscovered: ((WANPeerInfo) -> Void)?,
+        onPeerLeft: ((String) -> Void)?
+    ) {
+        self.onPeerDiscovered = onPeerDiscovered
+        self.onPeerLeft = onPeerLeft
+    }
+
     // MARK: - Lifecycle
 
     /// Start discovery: register with relay and listen for peer events

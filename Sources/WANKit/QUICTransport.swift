@@ -8,8 +8,7 @@ import ClusterKit
 public actor WANPeerConnection {
     public let remoteNodeID: String
     public let connection: NWConnection
-    private var messageContinuation: AsyncStream<ClusterMessage>.Continuation?
-    private var _incomingMessages: AsyncStream<ClusterMessage>?
+    private var messageSubscribers: [UUID: AsyncStream<ClusterMessage>.Continuation] = [:]
     public private(set) var isReady: Bool = false
     public private(set) var connectionState: WANConnectionState = .connecting
 
@@ -22,10 +21,6 @@ public actor WANPeerConnection {
 
     /// Start the connection and begin receiving messages
     public func start() async {
-        let (stream, continuation) = AsyncStream<ClusterMessage>.makeStream()
-        self.messageContinuation = continuation
-        self._incomingMessages = stream
-
         connection.stateUpdateHandler = { [weak self] state in
             Task { await self?.handleStateChange(state) }
         }
@@ -37,10 +32,13 @@ public actor WANPeerConnection {
 
     /// Incoming messages as an async stream
     public var incomingMessages: AsyncStream<ClusterMessage> {
-        if let stream = _incomingMessages {
-            return stream
+        let subscriberID = UUID()
+        return AsyncStream { continuation in
+            Task { await self.addSubscriber(continuation, id: subscriberID) }
+            continuation.onTermination = { [weak self] _ in
+                Task { await self?.removeSubscriber(id: subscriberID) }
+            }
         }
-        return AsyncStream { $0.finish() }
     }
 
     /// Send a ClusterMessage to the peer
@@ -72,7 +70,7 @@ public actor WANPeerConnection {
     public func cancel() {
         connectionState = .disconnected
         connection.cancel()
-        messageContinuation?.finish()
+        finishAllSubscribers()
     }
 
     // MARK: - Private
@@ -85,11 +83,11 @@ public actor WANPeerConnection {
         case .failed(let error):
             isReady = false
             connectionState = .failed(error.localizedDescription)
-            messageContinuation?.finish()
+            finishAllSubscribers()
         case .cancelled:
             isReady = false
             connectionState = .disconnected
-            messageContinuation?.finish()
+            finishAllSubscribers()
         case .waiting(let error):
             connectionState = .waiting(error.localizedDescription)
         default:
@@ -142,12 +140,32 @@ public actor WANPeerConnection {
     }
 
     private func deliverMessage(_ message: ClusterMessage) {
-        messageContinuation?.yield(message)
+        for continuation in messageSubscribers.values {
+            continuation.yield(message)
+        }
     }
 
     private func handleReceiveError() {
         connectionState = .disconnected
-        messageContinuation?.finish()
+        finishAllSubscribers()
+    }
+
+    private func addSubscriber(
+        _ continuation: AsyncStream<ClusterMessage>.Continuation,
+        id: UUID
+    ) {
+        messageSubscribers[id] = continuation
+    }
+
+    private func removeSubscriber(id: UUID) {
+        messageSubscribers.removeValue(forKey: id)
+    }
+
+    private func finishAllSubscribers() {
+        for continuation in messageSubscribers.values {
+            continuation.finish()
+        }
+        messageSubscribers.removeAll()
     }
 }
 

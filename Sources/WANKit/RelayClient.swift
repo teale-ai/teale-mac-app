@@ -224,8 +224,7 @@ public actor RelayClient {
     private let config: WANConfig
     private var webSocketTask: URLSessionWebSocketTask?
     private let urlSession: URLSession
-    private var messageContinuation: AsyncStream<RelayMessage>.Continuation?
-    private var _incomingMessages: AsyncStream<RelayMessage>?
+    private var messageSubscribers: [UUID: AsyncStream<RelayMessage>.Continuation] = [:]
     private var isConnected: Bool = false
     private var reconnectTask: Task<Void, Never>?
     private var currentBackoff: TimeInterval = 1.0
@@ -249,10 +248,6 @@ public actor RelayClient {
             throw WANError.relayConnectionFailed("No relay server URLs configured")
         }
 
-        let (stream, continuation) = AsyncStream<RelayMessage>.makeStream()
-        self.messageContinuation = continuation
-        self._incomingMessages = stream
-
         let task = urlSession.webSocketTask(with: relayURL)
         self.webSocketTask = task
         task.resume()
@@ -269,15 +264,18 @@ public actor RelayClient {
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
         isConnected = false
-        messageContinuation?.finish()
+        finishAllSubscribers()
     }
 
     /// Incoming messages from the relay server
     public var incomingMessages: AsyncStream<RelayMessage> {
-        if let stream = _incomingMessages {
-            return stream
+        let subscriberID = UUID()
+        return AsyncStream { continuation in
+            Task { await self.addSubscriber(continuation, id: subscriberID) }
+            continuation.onTermination = { [weak self] _ in
+                Task { await self?.removeSubscriber(id: subscriberID) }
+            }
         }
-        return AsyncStream { $0.finish() }
     }
 
     // MARK: - Send
@@ -385,16 +383,39 @@ public actor RelayClient {
                 }
 
                 if let message = try? JSONDecoder().decode(RelayMessage.self, from: data) {
-                    messageContinuation?.yield(message)
+                    deliverMessage(message)
                 }
 
                 _receiveLoop()
             } catch {
                 isConnected = false
-                messageContinuation?.finish()
                 scheduleReconnect()
             }
         }
+    }
+
+    private func deliverMessage(_ message: RelayMessage) {
+        for continuation in messageSubscribers.values {
+            continuation.yield(message)
+        }
+    }
+
+    private func addSubscriber(
+        _ continuation: AsyncStream<RelayMessage>.Continuation,
+        id: UUID
+    ) {
+        messageSubscribers[id] = continuation
+    }
+
+    private func removeSubscriber(id: UUID) {
+        messageSubscribers.removeValue(forKey: id)
+    }
+
+    private func finishAllSubscribers() {
+        for continuation in messageSubscribers.values {
+            continuation.finish()
+        }
+        messageSubscribers.removeAll()
     }
 
     // MARK: - Reconnection with exponential backoff

@@ -92,5 +92,6 @@ enum ChatCompletionsRoute {
         }
 
         return message.localizedCaseInsensitiveContains("no model")
+            || message.localizedCaseInsensitiveContains("no wan peer")
     }
 }

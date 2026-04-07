@@ -19,6 +19,10 @@ import AuthKit
 @Observable
 public final class AppState {
     private static let stableNodeIDKey = "teale.stable_node_id"
+    private static let inferenceBackendKey = "teale.inference_backend"
+    private static let exoBaseURLKey = "teale.exo_base_url"
+    private static let exoPreferredModelIDKey = "teale.exo_preferred_model_id"
+    private static let wanRelayURLKey = "teale.wan_relay_url"
 
     // Hardware
     public let hardware: HardwareCapability
@@ -29,6 +33,7 @@ public final class AppState {
 
     // Local inference provider
     private let localProvider: MLXProvider
+    private let exoProvider: ExoProvider
 
     // Models
     public let modelManager: ModelManagerService
@@ -80,10 +85,35 @@ public final class AppState {
 
     // Settings
     public var launchAtLogin: Bool = false
+    public var inferenceBackend: InferenceBackend = InferenceBackend(
+        rawValue: UserDefaults.standard.string(forKey: inferenceBackendKey) ?? InferenceBackend.localMLX.rawValue
+    ) ?? .localMLX {
+        didSet {
+            UserDefaults.standard.set(inferenceBackend.rawValue, forKey: Self.inferenceBackendKey)
+            Task { await applyInferenceBackendSelection() }
+        }
+    }
+    public var exoBaseURL: String = UserDefaults.standard.string(forKey: exoBaseURLKey) ?? "http://localhost:52415" {
+        didSet {
+            UserDefaults.standard.set(exoBaseURL, forKey: Self.exoBaseURLKey)
+            Task { await applyInferenceBackendSelection() }
+        }
+    }
+    public var exoPreferredModelID: String = UserDefaults.standard.string(forKey: exoPreferredModelIDKey) ?? "" {
+        didSet {
+            UserDefaults.standard.set(exoPreferredModelID, forKey: Self.exoPreferredModelIDKey)
+            Task { await applyInferenceBackendSelection() }
+        }
+    }
+    public var exoAvailableModels: [String] = []
+    public var exoRunningModels: [String] = []
+    public var exoStatusMessage: String = "Exo not configured"
     public var maxStorageGB: Double = UserDefaults.standard.object(forKey: "teale.maxStorageGB") as? Double ?? 50.0 {
         didSet { UserDefaults.standard.set(maxStorageGB, forKey: "teale.maxStorageGB") }
     }
-    public var wanRelayURL: String = "wss://relay.teale.network/ws"
+    public var wanRelayURL: String = UserDefaults.standard.string(forKey: wanRelayURLKey) ?? "wss://relay.teale.network/ws" {
+        didSet { UserDefaults.standard.set(wanRelayURL, forKey: Self.wanRelayURLKey) }
+    }
 
     /// Prevent system sleep so the node stays online for the inference pool.
     /// Display can still turn off — only system/idle sleep is inhibited.
@@ -124,41 +154,82 @@ public final class AppState {
         L.string(key, language: language)
     }
 
+    public var inferenceEngineName: String {
+        switch inferenceBackend {
+        case .localMLX:
+            return "MLX"
+        case .exo:
+            return "Exo"
+        }
+    }
+
     public var hasAvailableInferenceTarget: Bool {
         if case .ready = engineStatus {
             return true
         }
 
-        guard clusterEnabled else {
-            return false
+        if clusterEnabled,
+           clusterManager.topology.connectedPeers.contains(where: {
+               !$0.isGenerating && $0.throttleLevel > 0 && !$0.loadedModels.isEmpty
+           }) {
+            return true
         }
 
-        return clusterManager.topology.connectedPeers.contains {
-            !$0.isGenerating && $0.throttleLevel > 0 && !$0.loadedModels.isEmpty
+        if wanEnabled {
+            return wanManager.state.connectedPeers.contains { !$0.loadedModels.isEmpty }
         }
+
+        return false
     }
 
     public init() {
         let detector = HardwareDetector()
         let hw = detector.detect()
+        let initialBackend = InferenceBackend(
+            rawValue: UserDefaults.standard.string(forKey: Self.inferenceBackendKey) ?? InferenceBackend.localMLX.rawValue
+        ) ?? .localMLX
         self.hardware = hw
         self.throttler = AdaptiveThrottler()
 
         let mlxProvider = MLXProvider()
         self.localProvider = mlxProvider
-        self.engine = InferenceEngineManager(provider: mlxProvider, throttler: throttler)
+        let exoProvider = ExoProvider(
+            baseURLString: UserDefaults.standard.string(forKey: Self.exoBaseURLKey) ?? "http://localhost:52415",
+            preferredModelID: UserDefaults.standard.string(forKey: Self.exoPreferredModelIDKey)
+        )
+        self.exoProvider = exoProvider
+        let initialProvider: any InferenceProvider
+        if initialBackend == .exo {
+            initialProvider = exoProvider
+        } else {
+            initialProvider = mlxProvider
+        }
+        self.engine = InferenceEngineManager(provider: initialProvider, throttler: throttler)
         self.modelManager = ModelManagerService(hardware: hw, maxStorageGB: 50.0)
 
         let hostname = ProcessInfo.processInfo.hostName
         let deviceInfo = DeviceInfo(name: hostname, hardware: hw)
         self.clusterManager = ClusterManager(localDeviceInfo: deviceInfo)
         self.wanManager = WANManager()
-        self.clusterManager.onInferenceRequest = { [clusterManager, mlxProvider] payload, peer in
+        if let config = SupabaseConfig.default {
+            self.authManager = AuthManager(config: config)
+        } else {
+            self.authManager = nil
+        }
+        self.agentManager = AgentManager()
+
+        // Wallet placeholder — replaced async on launch
+        self.wallet = CreditWallet.placeholder()
+
+        self.clusterManager.onInferenceRequest = { [weak self, clusterManager] payload, peer in
+            guard let self else { return }
+
             clusterManager.beginServingInference()
             defer { clusterManager.endServingInference() }
 
             do {
-                let stream = mlxProvider.generate(request: payload.request)
+                let provider = self.currentServingProvider()
+                let stream = provider.generate(request: payload.request)
                 for try await chunk in stream {
                     let response = InferenceChunkPayload(requestID: payload.requestID, chunk: chunk)
                     try await peer.connection.send(.inferenceChunk(response))
@@ -174,15 +245,28 @@ public final class AppState {
                 try? await peer.connection.send(.inferenceError(response))
             }
         }
-        if let config = SupabaseConfig.default {
-            self.authManager = AuthManager(config: config)
-        } else {
-            self.authManager = nil
-        }
-        self.agentManager = AgentManager()
 
-        // Wallet placeholder — replaced async on launch
-        self.wallet = CreditWallet.placeholder()
+        self.wanManager.onInferenceRequest = { [weak self] payload, connection in
+            guard let self else { return }
+
+            do {
+                let provider = self.currentServingProvider()
+                let stream = provider.generate(request: payload.request)
+                for try await chunk in stream {
+                    let response = InferenceChunkPayload(requestID: payload.requestID, chunk: chunk)
+                    try await connection.send(.inferenceChunk(response))
+                }
+
+                let complete = InferenceCompletePayload(requestID: payload.requestID)
+                try await connection.send(.inferenceComplete(complete))
+            } catch {
+                let response = InferenceErrorPayload(
+                    requestID: payload.requestID,
+                    errorMessage: error.localizedDescription
+                )
+                try? await connection.send(.inferenceError(response))
+            }
+        }
     }
 
     /// Call once at app launch to initialize async components (auth, credit ledger, agent)
@@ -201,6 +285,8 @@ public final class AppState {
             await authManager.checkSession()
             clusterManager.updateAuthenticatedUserID(authManager.currentUser?.id)
         }
+
+        await applyInferenceBackendSelection()
 
         // Initialize credit wallet
         let ledger = await CreditLedger()
@@ -310,6 +396,11 @@ public final class AppState {
 
     /// Load a model into GPU memory for inference.
     public func loadModel(_ descriptor: ModelDescriptor) async {
+        if inferenceBackend == .exo {
+            exoPreferredModelID = descriptor.huggingFaceRepo
+            return
+        }
+
         do {
             // Unload any currently loaded model first
             if case .ready = engineStatus {
@@ -355,6 +446,11 @@ public final class AppState {
     }
 
     public func unloadModel() async {
+        if inferenceBackend == .exo {
+            exoPreferredModelID = ""
+            return
+        }
+
         await engine.unloadModel()
         selectedModel = nil
         engineStatus = .idle
@@ -376,7 +472,23 @@ public final class AppState {
     }
 
     public func refreshStatus() async {
+        if inferenceBackend == .exo {
+            try? await exoProvider.refreshSelection()
+        }
+
         engineStatus = await engine.status
+        selectedModel = await engine.loadedModel
+
+        if inferenceBackend == .exo {
+            exoAvailableModels = await exoProvider.availableModelIDs
+            exoRunningModels = await exoProvider.runningModelIDs
+            exoStatusMessage = await exoProvider.connectionSummary
+        } else {
+            exoAvailableModels = []
+            exoRunningModels = []
+            exoStatusMessage = "Exo not in use"
+        }
+
         syncAdvertisedLoadedModels()
     }
 
@@ -411,29 +523,17 @@ public final class AppState {
     }
 
     private func enableCluster() {
-        let clusterProvider = ClusterProvider(
-            localProvider: localProvider,
-            clusterManager: clusterManager,
-            onRemoteGenerationCompleted: { [weak self] record in
-                await self?.recordRemoteInferenceSettlement(record)
-            }
-        )
-        Task {
-            await engine.setProvider(clusterProvider)
-        }
         modelManager.peerModelSource = clusterManager
         clusterManager.updateAuthenticatedUserID(authManager?.currentUser?.id)
         clusterManager.enable()
-        syncAdvertisedLoadedModels()
+        Task { await applyInferenceBackendSelection() }
         clusterManager.scanForPeers()
     }
 
     private func disableCluster() {
         clusterManager.disable()
         modelManager.peerModelSource = nil
-        Task {
-            await engine.setProvider(localProvider)
-        }
+        Task { await applyInferenceBackendSelection() }
     }
 
     private func syncAdvertisedLoadedModels() {
@@ -446,6 +546,9 @@ public final class AppState {
         }
 
         clusterManager.updateLocalLoadedModels(loadedModels)
+        if wanEnabled {
+            Task { await wanManager.updateLocalLoadedModels(loadedModels) }
+        }
     }
 
     private func recordRemoteInferenceSettlement(_ record: ClusterProvider.RemoteGenerationRecord) async {
@@ -500,9 +603,7 @@ public final class AppState {
             return nil
         }
 
-        return ModelCatalog.allModels.first {
-            $0.id == modelID || $0.huggingFaceRepo == modelID || $0.name == modelID
-        }
+        return modelDescriptorForExternalID(modelID)
     }
 
     private func isInferenceSettlement(_ payload: CreditTransferPayload) -> Bool {
@@ -557,10 +658,7 @@ public final class AppState {
                 )
                 let deviceInfo = DeviceInfo(name: ProcessInfo.processInfo.hostName, hardware: hardware)
                 try await wanManager.enable(config: config, localDeviceInfo: deviceInfo)
-
-                // Set up WAN provider
-                let wanProvider = WANProvider(localProvider: localProvider, wanManager: wanManager)
-                await engine.setProvider(wanProvider)
+                await applyInferenceBackendSelection()
             } catch {
                 wanEnabled = false
             }
@@ -570,8 +668,56 @@ public final class AppState {
     private func disableWAN() {
         Task {
             await wanManager.disable()
-            await engine.setProvider(localProvider)
+            await applyInferenceBackendSelection()
         }
+    }
+
+    private func currentServingProvider() -> any InferenceProvider {
+        currentBaseProvider
+    }
+
+    private var normalizedExoPreferredModelID: String? {
+        let trimmed = exoPreferredModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private var currentBaseProvider: any InferenceProvider {
+        switch inferenceBackend {
+        case .localMLX:
+            return localProvider
+        case .exo:
+            return exoProvider
+        }
+    }
+
+    private func buildActiveInferenceProvider() -> any InferenceProvider {
+        var provider: any InferenceProvider = currentBaseProvider
+
+        if clusterEnabled {
+            provider = ClusterProvider(
+                localProvider: provider,
+                clusterManager: clusterManager,
+                onRemoteGenerationCompleted: { [weak self] record in
+                    await self?.recordRemoteInferenceSettlement(record)
+                }
+            )
+        }
+
+        if wanEnabled {
+            provider = WANProvider(localProvider: provider, wanManager: wanManager)
+        }
+
+        return provider
+    }
+
+    private func applyInferenceBackendSelection() async {
+        await exoProvider.updateConfiguration(
+            baseURLString: exoBaseURL,
+            preferredModelID: normalizedExoPreferredModelID
+        )
+        let provider = buildActiveInferenceProvider()
+        await engine.setProvider(provider)
+        await refreshStatus()
     }
 }
 
@@ -587,4 +733,20 @@ public enum AppView: Hashable {
     case agents
     case devices
     case settings
+}
+
+public enum InferenceBackend: String, CaseIterable, Hashable, Identifiable {
+    case localMLX = "local_mlx"
+    case exo = "exo"
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .localMLX:
+            return "Local MLX"
+        case .exo:
+            return "Exo Gateway"
+        }
+    }
 }
