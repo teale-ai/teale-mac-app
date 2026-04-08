@@ -9,8 +9,8 @@ struct CompanionChatView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // Connection indicator
-                connectionBanner
+                // Status indicator
+                statusBanner
 
                 // Messages
                 ScrollViewReader { proxy in
@@ -48,11 +48,11 @@ struct CompanionChatView: View {
             .toolbar {
                 #if os(iOS)
                 ToolbarItem(placement: .topBarLeading) {
-                    modelPicker
+                    modePicker
                 }
                 #else
                 ToolbarItem(placement: .automatic) {
-                    modelPicker
+                    modePicker
                 }
                 #endif
                 ToolbarItem(placement: .automatic) {
@@ -67,9 +67,56 @@ struct CompanionChatView: View {
         }
     }
 
-    // MARK: - Subviews
+    // MARK: - Status Banner
 
-    private var connectionBanner: some View {
+    private var statusBanner: some View {
+        Group {
+            switch appState.inferenceMode {
+            case .local:
+                if let model = appState.localModel {
+                    HStack {
+                        Image(systemName: "cpu")
+                            .foregroundStyle(.green)
+                            .font(.caption2)
+                        Text("On-device: \(model.name)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+                    .background(.green.opacity(0.1))
+                } else if appState.isLoadingModel {
+                    HStack {
+                        ProgressView()
+                            .controlSize(.mini)
+                        Text(appState.loadingPhase.isEmpty ? "Loading model..." : appState.loadingPhase)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+                    .background(.blue.opacity(0.1))
+                } else {
+                    HStack {
+                        Image(systemName: "cpu")
+                            .foregroundStyle(.orange)
+                            .font(.caption2)
+                        Text("No model loaded — go to Models tab")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+                    .background(.orange.opacity(0.1))
+                }
+
+            case .remote:
+                remoteStatusBanner
+            }
+        }
+    }
+
+    private var remoteStatusBanner: some View {
         Group {
             switch appState.connectionStatus {
             case .connected(let name):
@@ -90,7 +137,7 @@ struct CompanionChatView: View {
                     Image(systemName: "circle.fill")
                         .foregroundStyle(.red)
                         .font(.caption2)
-                    Text("Not connected -- go to Network tab")
+                    Text("Not connected — go to Network tab")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -127,32 +174,52 @@ struct CompanionChatView: View {
         }
     }
 
-    private var modelPicker: some View {
+    // MARK: - Mode Picker
+
+    private var modePicker: some View {
         Menu {
-            ForEach(appState.availableModels, id: \.self) { model in
-                Button {
-                    appState.selectedModel = model
-                } label: {
-                    HStack {
-                        Text(model)
-                        if model == appState.selectedModel {
-                            Image(systemName: "checkmark")
+            Section("Inference Mode") {
+                ForEach(InferenceMode.allCases, id: \.self) { mode in
+                    Button {
+                        appState.inferenceMode = mode
+                    } label: {
+                        HStack {
+                            Label(mode.rawValue, systemImage: mode == .local ? "cpu" : "network")
+                            if mode == appState.inferenceMode {
+                                Image(systemName: "checkmark")
+                            }
                         }
                     }
                 }
             }
-            if appState.availableModels.isEmpty {
-                Text("No models available")
+
+            if appState.inferenceMode == .remote {
+                Section("Remote Models") {
+                    ForEach(appState.availableModels, id: \.self) { model in
+                        Button {
+                            appState.selectedModel = model
+                        } label: {
+                            HStack {
+                                Text(model)
+                                if model == appState.selectedModel {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                }
             }
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: "cpu")
+                Image(systemName: appState.inferenceMode == .local ? "cpu" : "network")
                 Text(appState.selectedModel ?? "No Model")
                     .font(.caption)
                     .lineLimit(1)
             }
         }
     }
+
+    // MARK: - Empty State
 
     private var emptyStateView: some View {
         VStack(spacing: 16) {
@@ -164,13 +231,18 @@ struct CompanionChatView: View {
             Text("Start a conversation")
                 .font(.title3)
                 .foregroundStyle(.secondary)
-            if !appState.connectionStatus.isConnected {
-                Text("Connect to a Mac node in the Network tab first")
+            if !appState.canInfer {
+                Text(appState.inferenceMode == .local
+                     ? "Download and load a model in the Models tab"
+                     : "Connect to a Mac node in the Network tab")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
             }
         }
     }
+
+    // MARK: - Input Bar
 
     private var inputBar: some View {
         HStack(spacing: 8) {
@@ -197,7 +269,7 @@ struct CompanionChatView: View {
 
     private var canSend: Bool {
         !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        && appState.connectionStatus.isConnected
+        && appState.canInfer
         && !isGenerating
     }
 

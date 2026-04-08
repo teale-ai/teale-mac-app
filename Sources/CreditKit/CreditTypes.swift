@@ -52,6 +52,7 @@ public enum TransactionType: String, Codable, Sendable {
     case bonus
     case adjustment
     case transfer
+    case sdkEarning    // Earned via TealeSDK contribution (attributed to developer wallet)
 }
 
 // MARK: - CreditTransaction

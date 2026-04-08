@@ -51,6 +51,10 @@ public final class AppState {
     public let agentManager: AgentManager
     public var agentProfile: AgentProfile?
 
+    // Local model discovery
+    public let localModelScanner = LocalModelScanner()
+    public var scannedLocalModels: [LocalModelInfo] = []
+
     // Server & API Keys
     public var serverPort: Int = 11435
     public var isServerRunning: Bool = false
@@ -217,6 +221,41 @@ public final class AppState {
             loadingProgress = nil
             engineStatus = .error(error.localizedDescription)
         }
+    }
+
+    /// Load a model from a local directory (no download needed).
+    public func loadLocalModel(_ localModel: LocalModelInfo) async {
+        let descriptor = localModel.toDescriptor()
+        do {
+            if case .ready = engineStatus {
+                await engine.unloadModel()
+            }
+
+            selectedModel = descriptor
+            engineStatus = .loadingModel(descriptor)
+            loadingPhase = "Loading weights into memory…"
+            loadingProgress = 0
+
+            try await localProvider.loadLocalModel(from: localModel.path, descriptor: descriptor) { [weak self] progress in
+                Task { @MainActor in
+                    self?.loadingPhase = progress.phase.rawValue
+                    self?.loadingProgress = progress.fractionCompleted
+                }
+            }
+
+            loadingPhase = ""
+            loadingProgress = nil
+            engineStatus = .ready(descriptor)
+        } catch {
+            loadingPhase = ""
+            loadingProgress = nil
+            engineStatus = .error(error.localizedDescription)
+        }
+    }
+
+    /// Scan for MLX-compatible models in known local directories.
+    public func scanLocalModels() {
+        scannedLocalModels = localModelScanner.scanAll()
     }
 
     public func refreshDownloadedModels() async {
