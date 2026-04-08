@@ -1,12 +1,13 @@
 import Foundation
 import Network
 import ClusterKit
+import Darwin
 
 // MARK: - Hole Punch Result
 
 public enum HolePunchResult: Sendable {
-    case direct(WANPeerConnection)
-    case relayed(WANPeerConnection)
+    case direct(WANTransportConnection)
+    case relayed(WANTransportConnection)
     case failed(WANError)
 }
 
@@ -66,6 +67,8 @@ public actor NATTraversal {
         let connectionInfo = ConnectionInfo(
             publicIP: localMapping.publicIP,
             publicPort: localMapping.publicPort,
+            localIP: Self.preferredLocalIPv4Address(),
+            localPort: localMapping.publicPort,
             natType: localNATType
         )
 
@@ -80,12 +83,28 @@ public actor NATTraversal {
 
         // Step 5: Attempt direct QUIC connection if NAT types are compatible
         if canDirect {
+            if localMapping.publicIP == answer.connectionInfo.publicIP,
+               let localIP = answer.connectionInfo.localIP,
+               let localPort = answer.connectionInfo.localPort {
+                do {
+                    let sameLANConn = try await attemptDirectConnection(
+                        toHost: localIP,
+                        port: localPort,
+                        remoteNodeID: peerInfo.nodeID
+                    )
+                    return .direct(.direct(sameLANConn))
+                } catch {
+                    // Fall through to the public endpoint attempt.
+                }
+            }
+
             do {
                 let directConn = try await attemptDirectConnection(
-                    to: answer.connectionInfo,
+                    toHost: answer.connectionInfo.publicIP,
+                    port: answer.connectionInfo.publicPort,
                     remoteNodeID: peerInfo.nodeID
                 )
-                return .direct(directConn)
+                return .direct(.direct(directConn))
             } catch {
                 // Direct connection failed, fall through to relay
             }
@@ -115,6 +134,8 @@ public actor NATTraversal {
         let connectionInfo = ConnectionInfo(
             publicIP: localMapping.publicIP,
             publicPort: localMapping.publicPort,
+            localIP: Self.preferredLocalIPv4Address(),
+            localPort: localMapping.publicPort,
             natType: localNATType
         )
 
@@ -125,8 +146,23 @@ public actor NATTraversal {
         )
 
         // Attempt direct connection to offerer
+        if localMapping.publicIP == offer.connectionInfo.publicIP,
+           let localIP = offer.connectionInfo.localIP,
+           let localPort = offer.connectionInfo.localPort {
+            do {
+                return try await attemptDirectConnection(
+                    toHost: localIP,
+                    port: localPort,
+                    remoteNodeID: offer.fromNodeID
+                )
+            } catch {
+                // Fall through to the public endpoint attempt.
+            }
+        }
+
         let peerConnection = try await attemptDirectConnection(
-            to: offer.connectionInfo,
+            toHost: offer.connectionInfo.publicIP,
+            port: offer.connectionInfo.publicPort,
             remoteNodeID: offer.fromNodeID
         )
 
@@ -169,12 +205,13 @@ public actor NATTraversal {
 
     /// Attempt a direct QUIC connection to the peer's public endpoint
     private func attemptDirectConnection(
-        to info: ConnectionInfo,
+        toHost host: String,
+        port: UInt16,
         remoteNodeID: String
     ) async throws -> WANPeerConnection {
         let peerConn = QUICTransport.connect(
-            to: info.publicIP,
-            port: info.publicPort,
+            to: host,
+            port: port,
             remoteNodeID: remoteNodeID,
             identity: identity
         )
@@ -197,12 +234,13 @@ public actor NATTraversal {
     private func attemptRelayedConnection(
         to peer: WANPeerInfo,
         sessionID: String
-    ) async throws -> WANPeerConnection {
-        // For relay-assisted connections, we'd connect to the relay server's
-        // data channel and the relay forwards packets between peers.
-        // This is a placeholder — the relay server would need to support
-        // a TURN-like data forwarding mode.
-        throw WANError.natTraversalFailed("Relay-assisted connections not yet implemented")
+    ) async throws -> WANTransportConnection {
+        let connection = try await relayClient.openRelayedSession(
+            toNodeID: peer.nodeID,
+            sessionID: sessionID,
+            timeoutSeconds: timeoutSeconds
+        )
+        return .relayed(connection)
     }
 
     /// Authenticate a connection by exchanging signed messages
@@ -223,5 +261,71 @@ public actor NATTraversal {
                            signedChallenge.map { String(format: "%02x", $0) }.joined()]
         )
         try await connection.send(.heartbeat(authPayload))
+    }
+
+    private static func preferredLocalIPv4Address() -> String? {
+        var interfaces: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&interfaces) == 0, let first = interfaces else { return nil }
+        defer { freeifaddrs(interfaces) }
+
+        var preferred: String?
+        var candidate = first
+
+        while true {
+            let iface = candidate.pointee
+            let name = String(cString: iface.ifa_name)
+            let flags = Int32(iface.ifa_flags)
+
+            if let address = iface.ifa_addr,
+               address.pointee.sa_family == UInt8(AF_INET),
+               (flags & IFF_UP) != 0,
+               (flags & IFF_RUNNING) != 0,
+               (flags & IFF_LOOPBACK) == 0,
+               !isTunnelInterface(name) {
+                var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                let result = getnameinfo(
+                    address,
+                    socklen_t(address.pointee.sa_len),
+                    &host,
+                    socklen_t(host.count),
+                    nil,
+                    0,
+                    NI_NUMERICHOST
+                )
+
+                if result == 0 {
+                    let ip = String(cString: host)
+                    if name.hasPrefix("en"), isPrivateIPv4(ip) {
+                        return ip
+                    }
+                    if preferred == nil, isPrivateIPv4(ip) {
+                        preferred = ip
+                    }
+                }
+            }
+
+            guard let next = iface.ifa_next else { break }
+            candidate = next
+        }
+
+        return preferred
+    }
+
+    private static func isTunnelInterface(_ name: String) -> Bool {
+        name.hasPrefix("utun") ||
+        name.hasPrefix("tun") ||
+        name.hasPrefix("tap") ||
+        name.hasPrefix("ipsec") ||
+        name.hasPrefix("ppp")
+    }
+
+    private static func isPrivateIPv4(_ ip: String) -> Bool {
+        let octets = ip.split(separator: ".").compactMap { Int($0) }
+        guard octets.count == 4 else { return false }
+
+        if octets[0] == 10 { return true }
+        if octets[0] == 192, octets[1] == 168 { return true }
+        if octets[0] == 172, (16...31).contains(octets[1]) { return true }
+        return false
     }
 }

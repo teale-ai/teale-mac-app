@@ -11,10 +11,8 @@ import AuthKit
 struct SettingsView: View {
     @Environment(AppState.self) private var appState
     @State private var launchAtLogin = false
-    @State private var maxStorage: Double = 50.0
     @State private var apiPort: String = "11435"
     @State private var clusterPasscode: String = ""
-    @State private var wanRelayURL: String = "wss://relay.teale.network/ws"
     @State private var orgReservation: Double = 60
 
     var body: some View {
@@ -129,34 +127,39 @@ struct SettingsView: View {
 
             // WAN P2P
             Section("WAN P2P Network") {
+                HStack {
+                    Text("Relay Server:")
+                    TextField("wss://relay.example.com/ws", text: $state.wanRelayURL)
+                        .frame(width: 260)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                Text(appState.wanEnabled ? "Toggle WAN off and back on after changing the relay URL." : "WAN discovery and signaling require a reachable relay WebSocket URL.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+
                 Toggle("Enable WAN", isOn: $state.wanEnabled)
 
-                if appState.wanEnabled {
-                    HStack {
-                        Text("Relay Server:")
-                        TextField("URL", text: $wanRelayURL)
-                            .frame(width: 200)
-                            .textFieldStyle(.roundedBorder)
-                            .onChange(of: wanRelayURL) { _, newValue in
-                                appState.wanRelayURL = newValue
-                            }
-                    }
-
-                    let wanState = appState.wanManager.state
-                    HStack {
-                        Circle()
-                            .fill(wanState.relayStatus == .connected ? .green : .orange)
-                            .frame(width: 8, height: 8)
-                        Text(wanState.relayStatus == .connected ?
-                             "\(wanState.connectedPeers.count) WAN peer(s)" :
-                             "Connecting to relay...")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    LabeledContent("NAT Type", value: wanState.natType.rawValue)
+                let wanState = appState.wanManager.state
+                HStack {
+                    Circle()
+                        .fill(wanStatusColor)
+                        .frame(width: 8, height: 8)
+                    Text(wanStatusText)
                         .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+
+                if let wanLastError = appState.wanLastError {
+                    Label(wanLastError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+
+                LabeledContent("Relay", value: wanState.relayStatus.displayName)
+                    .font(.caption)
+                LabeledContent("NAT Type", value: wanState.natType.displayName)
+                    .font(.caption)
             }
 
             // Contribution Schedule
@@ -178,8 +181,8 @@ struct SettingsView: View {
             // Storage
             Section("Model Storage") {
                 VStack(alignment: .leading) {
-                    Text("Maximum storage: \(Int(maxStorage)) GB")
-                    Slider(value: $maxStorage, in: 5...200, step: 5)
+                    Text("Maximum storage: \(Int(state.maxStorageGB)) GB")
+                    Slider(value: $state.maxStorageGB, in: 5...200, step: 5)
                 }
             }
 
@@ -194,7 +197,7 @@ struct SettingsView: View {
 
             // About
             Section("About") {
-                LabeledContent("Version", value: "0.1.0")
+                LabeledContent("Version", value: displayVersion)
                 LabeledContent("Engine", value: "MLX")
                 Link("Source Code", destination: URL(string: "https://github.com/taylorhou/teale-mac-app")!)
             }
@@ -209,9 +212,29 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .navigationTitle("Settings")
         .onAppear {
-            maxStorage = appState.maxStorageGB
             apiPort = String(appState.serverPort)
             orgReservation = appState.clusterManager.orgCapacityReservation * 100
+        }
+    }
+
+    private var displayVersion: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        if let buildDate = info["TealeBuildDate"] as? String, !buildDate.isEmpty {
+            return buildDate
+        }
+
+        let short = info["CFBundleShortVersionString"] as? String
+        let build = info["CFBundleVersion"] as? String
+
+        switch (short, build) {
+        case let (short?, build?) where short != build:
+            return "\(short) (\(build))"
+        case let (short?, _):
+            return short
+        case let (_, build?):
+            return build
+        default:
+            return "Unknown"
         }
     }
 
@@ -222,6 +245,30 @@ struct SettingsView: View {
         case .tier3: return "Tier 3 — Tablet"
         case .tier4: return "Tier 4 — Mobile"
         }
+    }
+
+    private var wanStatusText: String {
+        if appState.isWANBusy {
+            return "Connecting to relay..."
+        }
+        if appState.wanEnabled {
+            let peerCount = appState.wanManager.state.connectedPeers.count
+            return peerCount == 0 ? "WAN enabled, no peers connected" : "\(peerCount) WAN peer(s)"
+        }
+        if appState.wanLastError != nil {
+            return "WAN failed to enable"
+        }
+        return "WAN is off"
+    }
+
+    private var wanStatusColor: Color {
+        if appState.isWANBusy {
+            return .orange
+        }
+        if appState.wanEnabled {
+            return appState.wanManager.state.relayStatus == .connected ? .green : .orange
+        }
+        return appState.wanLastError == nil ? .secondary : .red
     }
 
     private func setLaunchAtLogin(_ enabled: Bool) {

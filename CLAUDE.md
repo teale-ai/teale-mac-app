@@ -110,6 +110,17 @@ swift build          # CLI build (works, 86MB binary)
 # Open Package.swift in Xcode for full app experience (MenuBarExtra needs app bundle)
 ```
 
+## Conductor Setup
+
+If you use Conductor for this workspace, set the workspace setup script to:
+
+```bash
+./scripts/conductor-setup.sh
+```
+
+That helper avoids the interactive `zsh` comment parsing issue from pasted multi-line scripts,
+bootstraps `gstack` for Codex, and validates the Swift workspace with `swift build`.
+
 ## Dependencies
 
 - mlx-swift (0.21.x) — Apple's ML framework for Apple Silicon

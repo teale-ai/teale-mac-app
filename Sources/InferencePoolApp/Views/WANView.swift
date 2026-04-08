@@ -40,6 +40,13 @@ struct WANView: View {
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .multilineTextAlignment(.center)
+
+                        if let wanLastError = appState.wanLastError {
+                            Label(wanLastError, systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .multilineTextAlignment(.center)
+                        }
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 24)
@@ -86,7 +93,7 @@ private struct WANStatusSection: View {
                 HStack(spacing: 4) {
                     Image(systemName: "mappin.circle")
                         .foregroundStyle(.secondary)
-                    Text("Public: \(endpoint.publicIP):\(endpoint.publicPort)")
+                    Text("Public: \(endpoint.publicIP):\(String(endpoint.publicPort))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -98,6 +105,19 @@ private struct WANStatusSection: View {
                 Text("\(wanState.discoveredPeerCount) peers discovered on network")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button {
+                    Task {
+                        try? await appState.wanManager.refreshDiscovery()
+                    }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
             }
         }
     }

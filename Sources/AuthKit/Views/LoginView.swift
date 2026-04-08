@@ -89,6 +89,10 @@ public struct LoginView: View {
                     TextField("Phone number (+1...)", text: $phoneNumber)
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 300)
+                        .onSubmit {
+                            guard !phoneNumber.isEmpty, !isLoading else { return }
+                            Task { await handleSendOTP() }
+                        }
                         #if os(iOS)
                         .keyboardType(.phonePad)
                         .textContentType(.telephoneNumber)
@@ -112,6 +116,10 @@ public struct LoginView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 300)
                         .multilineTextAlignment(.center)
+                        .onSubmit {
+                            guard otpCode.count >= 6, !isLoading else { return }
+                            Task { await handleVerifyOTP() }
+                        }
                         #if os(iOS)
                         .keyboardType(.numberPad)
                         .textContentType(.oneTimeCode)

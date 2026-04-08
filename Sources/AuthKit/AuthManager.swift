@@ -3,6 +3,39 @@ import SharedTypes
 import Supabase
 import Auth
 
+// MARK: - File-based auth token storage (avoids Keychain prompts on unsigned apps)
+
+private struct FileAuthStorage: AuthLocalStorage, @unchecked Sendable {
+    private let directory: URL
+
+    init() {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        self.directory = appSupport.appendingPathComponent("com.teale.app/auth", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    func store(key: String, value: Data) throws {
+        let url = directory.appendingPathComponent(safeFileName(key))
+        try value.write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    func retrieve(key: String) throws -> Data? {
+        let url = directory.appendingPathComponent(safeFileName(key))
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try Data(contentsOf: url)
+    }
+
+    func remove(key: String) throws {
+        let url = directory.appendingPathComponent(safeFileName(key))
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    private func safeFileName(_ key: String) -> String {
+        key.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? key
+    }
+}
+
 // MARK: - Auth Manager
 
 @MainActor
@@ -27,7 +60,10 @@ public final class AuthManager {
     public init(config: SupabaseConfig) {
         self.client = SupabaseClient(
             supabaseURL: config.url,
-            supabaseKey: config.anonKey
+            supabaseKey: config.anonKey,
+            options: SupabaseClientOptions(
+                auth: .init(storage: FileAuthStorage())
+            )
         )
         self.redirectURL = config.redirectURL
     }
@@ -44,8 +80,9 @@ public final class AuthManager {
     public func checkSession() async {
         // Check if user previously chose anonymous mode
         if UserDefaults.standard.bool(forKey: Self.anonymousKey) {
-            // Check if they also have a valid session (upgraded from anonymous)
-            if let session = try? await client.auth.session {
+            // Check if they also have a valid session (upgraded from anonymous).
+            // Use a timeout so the app doesn't hang if Supabase is unreachable.
+            if let session = try? await withTimeout(seconds: 5, operation: { try await self.client.auth.session }) {
                 let profile = await loadProfile(userID: session.user.id)
                 authState = .signedIn(profile)
                 currentUser = profile
@@ -58,9 +95,9 @@ public final class AuthManager {
             return
         }
 
-        // Try to restore existing session
+        // Try to restore existing session (with timeout)
         do {
-            let session = try await client.auth.session
+            let session = try await withTimeout(seconds: 5, operation: { try await self.client.auth.session })
             let profile = await loadProfile(userID: session.user.id)
             authState = .signedIn(profile)
             currentUser = profile
@@ -69,6 +106,21 @@ public final class AuthManager {
             startLastSeenTimer()
         } catch {
             authState = .signedOut
+        }
+    }
+
+    private func withTimeout<T: Sendable>(seconds: TimeInterval, operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(seconds))
+                throw CancellationError()
+            }
+            guard let result = try await group.next() else {
+                throw CancellationError()
+            }
+            group.cancelAll()
+            return result
         }
     }
 
@@ -286,36 +338,68 @@ public final class AuthManager {
         }
 
         do {
-            // Check if this device is already registered (match by wan_node_id or name+platform)
-            if let nodeID = wanNodeID {
-                let existing: [DeviceResponse] = try await client.from("devices")
+            var existingDevices: [DeviceResponse] = []
+
+            // Primary lookup: hostname + platform (the stable machine identity)
+            existingDevices = try await client.from("devices")
+                .select("id")
+                .eq("user_id", value: user.id.uuidString)
+                .eq("device_name", value: deviceName)
+                .eq("platform", value: platform.rawValue)
+                .eq("is_active", value: true)
+                .order("last_seen", ascending: false)
+                .execute()
+                .value
+
+            // Fallback: WAN node ID (catches renamed machines with same identity key)
+            if existingDevices.isEmpty, let nodeID = wanNodeID {
+                existingDevices = try await client.from("devices")
                     .select("id")
                     .eq("wan_node_id", value: nodeID)
                     .eq("user_id", value: user.id.uuidString)
+                    .eq("is_active", value: true)
+                    .order("last_seen", ascending: false)
                     .execute()
                     .value
+            }
 
-                if let device = existing.first {
-                    // Update existing device
-                    currentDeviceID = device.id
+            if let device = existingDevices.first {
+                // Update existing device and collapse same-machine duplicates onto it.
+                currentDeviceID = device.id
 
-                    struct DeviceUpdate: Encodable {
-                        let last_seen: String
-                        let device_name: String
-                        let is_active: Bool
-                    }
-
-                    let update = DeviceUpdate(
-                        last_seen: ISO8601DateFormatter().string(from: Date()),
-                        device_name: deviceName,
-                        is_active: true
-                    )
-                    _ = try? await client.from("devices")
-                        .update(update)
-                        .eq("id", value: device.id.uuidString)
-                        .execute()
-                    return
+                struct DeviceUpdate: Encodable {
+                    let last_seen: String
+                    let device_name: String
+                    let is_active: Bool
+                    let chip_name: String?
+                    let ram_gb: Int?
+                    let wan_node_id: String?
                 }
+
+                let update = DeviceUpdate(
+                    last_seen: ISO8601DateFormatter().string(from: Date()),
+                    device_name: deviceName,
+                    is_active: true,
+                    chip_name: deviceHardware?.chipName,
+                    ram_gb: deviceHardware?.ramGB,
+                    wan_node_id: wanNodeID
+                )
+                _ = try? await client.from("devices")
+                    .update(update)
+                    .eq("id", value: device.id.uuidString)
+                    .execute()
+
+                struct DuplicateDeactivateUpdate: Encodable {
+                    let is_active: Bool
+                }
+
+                for duplicate in existingDevices.dropFirst() {
+                    _ = try? await client.from("devices")
+                        .update(DuplicateDeactivateUpdate(is_active: false))
+                        .eq("id", value: duplicate.id.uuidString)
+                        .execute()
+                }
+                return
             }
 
             // Register new device
@@ -359,7 +443,7 @@ public final class AuthManager {
                 .value
 
             let formatter = ISO8601DateFormatter()
-            devices = rows.map { row in
+            let mappedDevices = rows.map { row in
                 DeviceRecord(
                     id: row.id,
                     userID: row.user_id,
@@ -372,6 +456,16 @@ public final class AuthManager {
                     lastSeen: formatter.date(from: row.last_seen ?? "") ?? Date(),
                     isActive: row.is_active
                 )
+            }
+
+            devices = deduplicatedDevices(mappedDevices)
+
+            if let wanNodeID,
+               let current = devices.first(where: { $0.wanNodeID == wanNodeID }) {
+                currentDeviceID = current.id
+            } else if let currentDeviceID,
+                      devices.contains(where: { $0.id == currentDeviceID }) {
+                self.currentDeviceID = currentDeviceID
             }
         } catch {
             // Non-fatal
@@ -481,6 +575,45 @@ public final class AuthManager {
             .eq("id", value: user.id.uuidString)
             .execute()
         currentUser?.displayName = name
+    }
+
+    private func deduplicatedDevices(_ devices: [DeviceRecord]) -> [DeviceRecord] {
+        var deduped: [String: DeviceRecord] = [:]
+        var staleIDs: [UUID] = []
+
+        for device in devices {
+            // Key by hostname + platform — the physical machine identity.
+            // wanNodeID and hardware details can change across reinstalls/updates.
+            let key = "\(device.deviceName)|\(device.platform.rawValue)"
+
+            if let existing = deduped[key] {
+                if device.lastSeen > existing.lastSeen {
+                    staleIDs.append(existing.id)
+                    deduped[key] = device
+                } else {
+                    staleIDs.append(device.id)
+                }
+            } else {
+                deduped[key] = device
+            }
+        }
+
+        // Deactivate stale duplicates in the background
+        if !staleIDs.isEmpty {
+            Task {
+                for staleID in staleIDs {
+                    struct DeactivateUpdate: Encodable {
+                        let is_active: Bool
+                    }
+                    _ = try? await client.from("devices")
+                        .update(DeactivateUpdate(is_active: false))
+                        .eq("id", value: staleID.uuidString)
+                        .execute()
+                }
+            }
+        }
+
+        return deduped.values.sorted { $0.lastSeen > $1.lastSeen }
     }
 }
 

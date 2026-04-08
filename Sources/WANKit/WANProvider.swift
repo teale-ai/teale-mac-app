@@ -112,7 +112,7 @@ public actor WANProvider: InferenceProvider {
 
     private func generateRemote(
         request: ChatCompletionRequest,
-        connection: WANPeerConnection,
+        connection: WANTransportConnection,
         continuation: AsyncThrowingStream<ChatCompletionChunk, Error>.Continuation
     ) async throws {
         let requestID = UUID()

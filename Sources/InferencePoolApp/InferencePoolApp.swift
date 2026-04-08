@@ -14,12 +14,16 @@ import AuthKit
 
 @main
 struct InferencePoolApp: App {
-    @State private var appState = AppState()
+    @State private var appState: AppState
 
     init() {
         // Disable Hub library's NetworkMonitor offline mode detection
         // which incorrectly reports "expensive" connections and blocks downloads
         setenv("CI_DISABLE_NETWORK_MONITOR", "1", 1)
+
+        // Create AppState eagerly so the HTTP server starts immediately.
+        let state = AppState()
+        _appState = State(initialValue: state)
     }
 
     var body: some Scene {
@@ -43,8 +47,11 @@ struct ContentView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
+        let authState = appState.authManager?.authState
+        let shouldShowMainApp = (authState?.canUseApp ?? true) || appState.showSignIn
+
         Group {
-            if appState.authManager?.authState.canUseApp ?? true {
+            if shouldShowMainApp {
                 NavigationSplitView {
                     SidebarView()
                 } detail: {
@@ -86,11 +93,14 @@ struct ContentView: View {
                 LoginView(authManager: appState.authManager!)
             }
         }
-        .task {
-            await appState.initializeAsync()
-            if appState.authManager?.authState.canUseApp ?? true {
-                await appState.startServer()
+        .onChange(of: appState.authManager?.authState.isAuthenticated ?? false) { _, isAuthenticated in
+            if isAuthenticated {
+                appState.showSignIn = false
             }
+        }
+        .task {
+            await appState.startServer()
+            await appState.initializeAsync()
         }
     }
 }

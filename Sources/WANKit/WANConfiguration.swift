@@ -15,7 +15,7 @@ public struct WANConfig: Sendable {
     public var heartbeatIntervalSeconds: TimeInterval
 
     public init(
-        relayServerURLs: [URL] = [URL(string: "wss://relay.teale.network/ws")!],
+        relayServerURLs: [URL] = [URL(string: "wss://relay.teale.com/ws")!],
         stunServerURLs: [URL] = [
             URL(string: "stun://stun.l.google.com:19302")!,
             URL(string: "stun://stun1.l.google.com:19302")!,
@@ -89,18 +89,37 @@ public struct WANNodeIdentity: Sendable {
         return key.isValidSignature(signature, for: data)
     }
 
-    // MARK: - Keychain persistence
+    // MARK: - Identity Persistence (Keychain with file fallback)
 
     private static let keychainService = "com.teale.app"
     private static let keychainAccount = "wan-identity-key"
 
-    /// Load identity from Keychain, or generate and store a new one
+    /// File-based fallback path for environments where Keychain is unavailable
+    /// (e.g. CLI-built apps without code signing, headless SSH sessions).
+    private static var fileFallbackURL: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dir = appSupport.appendingPathComponent("com.teale.app", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("wan-identity.key")
+    }
+
+    /// Load identity from Keychain or file, or generate and store a new one
     public static func loadOrCreate() throws -> WANNodeIdentity {
+        // Try Keychain first
         if let existing = try? loadFromKeychain() {
             return existing
         }
+        // Try file fallback
+        if let existing = try? loadFromFile() {
+            return existing
+        }
+        // Generate new identity and persist it
         let identity = WANNodeIdentity()
-        try saveToKeychain(identity)
+        // Try Keychain, fall back to file
+        if (try? saveToKeychain(identity)) != nil {
+            return identity
+        }
+        try saveToFile(identity)
         return identity
     }
 
@@ -122,7 +141,8 @@ public struct WANNodeIdentity: Sendable {
     }
 
     /// Save the private key to Keychain
-    public static func saveToKeychain(_ identity: WANNodeIdentity) throws {
+    @discardableResult
+    public static func saveToKeychain(_ identity: WANNodeIdentity) throws -> Bool {
         let data = identity.privateKey.rawRepresentation
 
         // Delete existing if present
@@ -145,6 +165,29 @@ public struct WANNodeIdentity: Sendable {
         guard status == errSecSuccess else {
             throw WANError.keychainSaveFailed
         }
+        return true
+    }
+
+    // MARK: - File-based fallback
+
+    private static func loadFromFile() throws -> WANNodeIdentity {
+        let url = fileFallbackURL
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw WANError.keychainLoadFailed
+        }
+        let data = try Data(contentsOf: url)
+        return try WANNodeIdentity(privateKeyData: data)
+    }
+
+    private static func saveToFile(_ identity: WANNodeIdentity) throws {
+        let data = identity.privateKey.rawRepresentation
+        let url = fileFallbackURL
+        try data.write(to: url, options: [.atomic, .completeFileProtection])
+        // Restrict permissions to owner-only
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: url.path
+        )
     }
 }
 
