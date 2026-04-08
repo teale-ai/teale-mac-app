@@ -10,6 +10,11 @@ CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 
+# Prefer Xcode over Command Line Tools for xcodebuild (needed for Metal shaders).
+if [ -d "/Applications/Xcode.app/Contents/Developer" ]; then
+    export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+fi
+
 echo "Building InferencePoolApp (Release via xcodebuild)..."
 xcodebuild \
     -scheme InferencePoolApp \
@@ -36,16 +41,36 @@ mkdir -p "${RESOURCES_DIR}"
 cp "${BINARY}" "${MACOS_DIR}/InferencePoolApp"
 strip "${MACOS_DIR}/InferencePoolApp"
 
-# Copy Metal shader library bundle (required for MLX inference)
-if [ -d "${METALLIB_BUNDLE}" ]; then
-    cp -R "${METALLIB_BUNDLE}" "${RESOURCES_DIR}/"
-    echo "  Included Metal shader library ($(du -sh "${METALLIB_BUNDLE}" | cut -f1))"
-else
+RELEASE_PRODUCTS_DIR="${DERIVED_DATA}/Build/Products/Release"
+
+# Copy SwiftPM resource bundles, including the MLX metal library bundle.
+FOUND_BUNDLES=0
+for bundle in "${RELEASE_PRODUCTS_DIR}"/*.bundle; do
+    if [ ! -d "${bundle}" ]; then
+        continue
+    fi
+
+    cp -R "${bundle}" "${RESOURCES_DIR}/"
+    FOUND_BUNDLES=1
+    echo "  Included resource bundle $(basename "${bundle}") ($(du -sh "${bundle}" | cut -f1))"
+done
+
+if [ "${FOUND_BUNDLES}" -eq 0 ]; then
+    echo "WARNING: No resource bundles found in ${RELEASE_PRODUCTS_DIR}"
+elif [ ! -d "${METALLIB_BUNDLE}" ]; then
     echo "WARNING: Metal shader bundle not found — inference will not work"
 fi
 
 # Copy Info.plist
 cp Sources/InferencePoolApp/Info.plist "${CONTENTS_DIR}/Info.plist"
+
+BUILD_DATE="$(date '+%Y.%m.%d')"
+BUILD_NUMBER="$(date '+%Y%m%d%H%M')"
+
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${BUILD_DATE}" "${CONTENTS_DIR}/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER}" "${CONTENTS_DIR}/Info.plist"
+/usr/libexec/PlistBuddy -c "Delete :TealeBuildDate" "${CONTENTS_DIR}/Info.plist" >/dev/null 2>&1 || true
+/usr/libexec/PlistBuddy -c "Add :TealeBuildDate string ${BUILD_DATE}" "${CONTENTS_DIR}/Info.plist"
 
 # Sign with ad-hoc signature + entitlements (required for MenuBarExtra + network)
 # TODO: Replace with Developer ID for distribution: --sign "Developer ID Application: ..."

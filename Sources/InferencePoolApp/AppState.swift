@@ -16,6 +16,12 @@ import AuthKit
 @MainActor
 @Observable
 public final class AppState {
+    private enum Preferences {
+        static let maxStorageGB = "teale.maxStorageGB"
+        static let wanRelayURL = "teale.wanRelayURL"
+        static let installNodeID = "teale.installNodeID"
+    }
+
     // Hardware
     public let hardware: HardwareCapability
     public let throttler: AdaptiveThrottler
@@ -38,8 +44,13 @@ public final class AppState {
     // WAN P2P
     public let wanManager: WANManager
     public var wanEnabled: Bool = false {
-        didSet { toggleWAN() }
+        didSet {
+            guard !isUpdatingWANToggle else { return }
+            toggleWAN()
+        }
     }
+    public var isWANBusy: Bool = false
+    public var wanLastError: String?
 
     // Credits
     public var wallet: CreditWallet
@@ -75,8 +86,19 @@ public final class AppState {
 
     // Settings
     public var launchAtLogin: Bool = false
-    public var maxStorageGB: Double = 50.0
-    public var wanRelayURL: String = "wss://relay.teale.network/ws"
+    public var maxStorageGB: Double = 50.0 {
+        didSet {
+            UserDefaults.standard.set(maxStorageGB, forKey: Preferences.maxStorageGB)
+            Task { await modelManager.cache.setMaxStorage(maxStorageGB) }
+        }
+    }
+    public var wanRelayURL: String = "wss://relay.teale.com/ws" {
+        didSet {
+            UserDefaults.standard.set(wanRelayURL, forKey: Preferences.wanRelayURL)
+        }
+    }
+
+    private var isUpdatingWANToggle: Bool = false
 
     public init() {
         let detector = HardwareDetector()
@@ -86,8 +108,9 @@ public final class AppState {
 
         let mlxProvider = MLXProvider()
         self.localProvider = mlxProvider
+        let persistedMaxStorage = UserDefaults.standard.object(forKey: Preferences.maxStorageGB) as? Double ?? 50.0
         self.engine = InferenceEngineManager(provider: mlxProvider, throttler: throttler)
-        self.modelManager = ModelManagerService(hardware: hw, maxStorageGB: 50.0)
+        self.modelManager = ModelManagerService(hardware: hw, maxStorageGB: persistedMaxStorage)
 
         let hostname = ProcessInfo.processInfo.hostName
         let deviceInfo = DeviceInfo(name: hostname, hardware: hw)
@@ -102,6 +125,34 @@ public final class AppState {
 
         // Wallet placeholder — replaced async on launch
         self.wallet = CreditWallet.placeholder()
+        self.maxStorageGB = persistedMaxStorage
+        self.wanRelayURL = UserDefaults.standard.string(forKey: Preferences.wanRelayURL) ?? "wss://relay.teale.com/ws"
+        // Start server eagerly so it's available even if the MenuBarExtra is never clicked.
+        // DispatchQueue.global dispatches to a background thread, then Task hops to @MainActor.
+        let appState = self
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1) {
+            Task { @MainActor in
+                await appState.startServer()
+                await appState.initializeAsync()
+            }
+        }
+
+        self.clusterManager.onInferenceRequest = { [weak self] payload, connection in
+            await self?.handleIncomingInferenceRequest(
+                payload,
+                sendMessage: { message in
+                    try await connection.send(message)
+                }
+            )
+        }
+        self.wanManager.onInferenceRequest = { [weak self] payload, connection in
+            await self?.handleIncomingInferenceRequest(
+                payload,
+                sendMessage: { message in
+                    try await connection.send(message)
+                }
+            )
+        }
     }
 
     /// Call once at app launch to initialize async components (auth, credit ledger, agent)
@@ -125,7 +176,7 @@ public final class AppState {
         // Initialize agent profile — use a random node ID to avoid Keychain prompt on launch.
         // WANNodeIdentity is created lazily when WAN is actually enabled.
         let hostname = ProcessInfo.processInfo.hostName
-        let nodeID = UUID().uuidString
+        let nodeID = stableInstallNodeID()
 
         // Link WAN identity to auth device record
         if let authManager {
@@ -211,6 +262,9 @@ public final class AppState {
             loadingPhase = ""
             loadingProgress = nil
             engineStatus = .ready(descriptor)
+            if wanEnabled {
+                await wanManager.updateLocalLoadedModels([descriptor.huggingFaceRepo])
+            }
             await refreshDownloadedModels()
         } catch {
             loadingPhase = ""
@@ -233,6 +287,55 @@ public final class AppState {
         await engine.unloadModel()
         selectedModel = nil
         engineStatus = .idle
+        if wanEnabled {
+            await wanManager.updateLocalLoadedModels([])
+        }
+    }
+
+    private func handleIncomingInferenceRequest(
+        _ payload: InferenceRequestPayload,
+        sendMessage: @escaping @Sendable (ClusterMessage) async throws -> Void
+    ) async {
+        let localModelID = selectedModel?.huggingFaceRepo
+        let requestedModelID = payload.request.model ?? localModelID
+
+        guard let requestedModelID else {
+            try? await sendMessage(.inferenceError(InferenceErrorPayload(
+                requestID: payload.requestID,
+                errorMessage: "No model specified for remote inference request"
+            )))
+            return
+        }
+
+        guard localModelID == requestedModelID else {
+            try? await sendMessage(.inferenceError(InferenceErrorPayload(
+                requestID: payload.requestID,
+                errorMessage: "Model \(requestedModelID) is not loaded on this device"
+            )))
+            return
+        }
+
+        var request = payload.request
+        request.model = requestedModelID
+
+        do {
+            let stream = localProvider.generate(request: request)
+            for try await chunk in stream {
+                try await sendMessage(.inferenceChunk(InferenceChunkPayload(
+                    requestID: payload.requestID,
+                    chunk: chunk
+                )))
+            }
+
+            try await sendMessage(.inferenceComplete(InferenceCompletePayload(
+                requestID: payload.requestID
+            )))
+        } catch {
+            try? await sendMessage(.inferenceError(InferenceErrorPayload(
+                requestID: payload.requestID,
+                errorMessage: error.localizedDescription
+            )))
+        }
     }
 
     public func startServer() async {
@@ -242,7 +345,8 @@ public final class AppState {
             engine: engine,
             port: serverPort,
             apiKeyStore: apiKeyStore,
-            allowNetworkAccess: allowNetworkAccess
+            allowNetworkAccess: allowNetworkAccess,
+            controller: RemoteControlBridge(appState: self)
         )
         Task.detached {
             try? await server.start()
@@ -310,31 +414,102 @@ public final class AppState {
     }
 
     private func enableWAN() {
-        Task {
+        let relayURLString = wanRelayURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let relayURL = validatedWANRelayURL(from: relayURLString) else {
+            wanLastError = "Enter a valid relay WebSocket URL before enabling WAN."
+            setWANEnabled(false)
+            return
+        }
+
+        wanLastError = nil
+        isWANBusy = true
+
+        // Capture values needed off the main actor to avoid blocking it during network ops.
+        let hw = hardware
+        let hostName = ProcessInfo.processInfo.hostName
+        let loadedModels = selectedModel.map { [$0.huggingFaceRepo] } ?? []
+
+        // Run network-heavy work off the main actor so API endpoints remain responsive.
+        Task.detached { [weak self] in
             do {
                 let identity = try WANNodeIdentity.loadOrCreate()
                 let config = WANConfig(
-                    relayServerURLs: [URL(string: wanRelayURL)!],
+                    relayServerURLs: [relayURL],
                     identity: identity,
-                    displayName: ProcessInfo.processInfo.hostName
+                    displayName: hostName
                 )
-                let deviceInfo = DeviceInfo(name: ProcessInfo.processInfo.hostName, hardware: hardware)
-                try await wanManager.enable(config: config, localDeviceInfo: deviceInfo)
+                let deviceInfo = DeviceInfo(
+                    name: hostName,
+                    hardware: hw,
+                    loadedModels: loadedModels
+                )
 
-                // Set up WAN provider
-                let wanProvider = WANProvider(localProvider: localProvider, wanManager: wanManager)
-                await engine.setProvider(wanProvider)
+                guard let self else { return }
+                try await self.wanManager.enable(config: config, localDeviceInfo: deviceInfo)
+
+                // Hop back to main actor for UI/engine updates.
+                await MainActor.run {
+                    let wanProvider = WANProvider(localProvider: self.localProvider, wanManager: self.wanManager)
+                    Task { await self.engine.setProvider(wanProvider) }
+                    self.wanLastError = nil
+                    self.isWANBusy = false
+                }
             } catch {
-                wanEnabled = false
+                let msg = error.localizedDescription
+                guard let self else { return }
+                await MainActor.run {
+                    self.wanLastError = msg
+                    self.isWANBusy = false
+                    self.setWANEnabled(false)
+                }
+                await self.wanManager.disable()
+                await self.engine.setProvider(self.localProvider)
             }
         }
     }
 
-    private func disableWAN() {
+    private func disableWAN(clearError: Bool = true) {
+        isWANBusy = false
+        if clearError {
+            wanLastError = nil
+        }
         Task {
             await wanManager.disable()
             await engine.setProvider(localProvider)
         }
+    }
+
+    private func validatedWANRelayURL(from string: String) -> URL? {
+        guard let url = URL(string: string),
+              let scheme = url.scheme?.lowercased(),
+              ["ws", "wss"].contains(scheme),
+              url.host != nil
+        else {
+            return nil
+        }
+        return url
+    }
+
+    private func setWANEnabled(_ enabled: Bool) {
+        isUpdatingWANToggle = true
+        wanEnabled = enabled
+        isUpdatingWANToggle = false
+    }
+
+    /// Unbuffered stderr log for WAN diagnostics (visible even when stdout is redirected to a file).
+    nonisolated static func wanLog(_ message: String) {
+        let line = "[WAN] \(message)\n"
+        FileHandle.standardError.write(Data(line.utf8))
+    }
+
+    private func stableInstallNodeID() -> String {
+        if let existing = UserDefaults.standard.string(forKey: Preferences.installNodeID) {
+            return existing
+        }
+
+        let generated = UUID().uuidString
+        UserDefaults.standard.set(generated, forKey: Preferences.installNodeID)
+        return generated
     }
 }
 

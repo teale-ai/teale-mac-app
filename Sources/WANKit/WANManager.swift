@@ -70,7 +70,7 @@ public enum WANConnectionType: String, Sendable {
 
 struct ConnectedWANPeer: Sendable {
     var peerInfo: WANPeerInfo
-    var connection: WANPeerConnection
+    var connection: WANTransportConnection
     var connectionType: WANConnectionType
     var lastHeartbeat: Date
     var latencyMs: Double?
@@ -105,7 +105,7 @@ public final class WANManager: @unchecked Sendable {
     private var listenerTask: Task<Void, Never>?
 
     // Callbacks
-    public var onInferenceRequest: ((InferenceRequestPayload, WANPeerConnection) async -> Void)?
+    public var onInferenceRequest: ((InferenceRequestPayload, WANTransportConnection) async -> Void)?
 
     public init() {}
 
@@ -132,6 +132,10 @@ public final class WANManager: @unchecked Sendable {
         self.stunClient = stun
         self.discoveryService = discovery
         self.natTraversal = nat
+
+        await discovery.setOnPeerDiscovered { [weak self] peer in
+            Task { await self?.handleDiscoveredPeer(peer) }
+        }
 
         // Connect to relay
         try await relay.connect()
@@ -165,12 +169,7 @@ public final class WANManager: @unchecked Sendable {
         }
 
         // Register and start discovery
-        let capabilities = NodeCapabilities(
-            hardware: localDeviceInfo.hardware,
-            loadedModels: localDeviceInfo.loadedModels,
-            maxModelSizeGB: localDeviceInfo.hardware.availableRAMForModelsGB,
-            isAvailable: true
-        )
+        let capabilities = currentCapabilities()
         try await discovery.start(capabilities: capabilities)
 
         // Start relay message listener for offers/answers
@@ -301,8 +300,30 @@ public final class WANManager: @unchecked Sendable {
     }
 
     /// Get the WANPeerConnection for a connected peer with the given model
-    public func connectionForPeer(withModel modelID: String) -> WANPeerConnection? {
+    public func connectionForPeer(withModel modelID: String) -> WANTransportConnection? {
         connectedPeers.values.first { $0.peerInfo.hasModel(modelID) }?.connection
+    }
+
+    /// Force a relay re-registration and peer discovery refresh.
+    public func refreshDiscovery() async throws {
+        guard isEnabled else { return }
+        let capabilities = currentCapabilities()
+        try await discoveryService?.updateCapabilities(capabilities)
+        try await discoveryService?.refresh()
+        updateState(mapping: state.publicEndpoint, natType: state.natType)
+    }
+
+    /// Update the relay/discovery view of which models this node currently has loaded.
+    public func updateLocalLoadedModels(_ loadedModels: [String]) async {
+        guard isEnabled else { return }
+
+        localDeviceInfo?.loadedModels = loadedModels
+
+        do {
+            try await discoveryService?.updateCapabilities(currentCapabilities())
+        } catch {
+            // Keep operating with the last advertised capabilities if the relay refresh fails.
+        }
     }
 
     // MARK: - Message Handling
@@ -347,6 +368,18 @@ public final class WANManager: @unchecked Sendable {
         }
     }
 
+    private func handleDiscoveredPeer(_ peer: WANPeerInfo) async {
+        guard let config else { return }
+        guard peer.nodeID != config.identity.nodeID else { return }
+        guard connectedPeers[peer.nodeID] == nil else { return }
+
+        do {
+            try await connectToPeer(peer)
+        } catch {
+            // Discovery should be opportunistic; a failed auto-connect is non-fatal.
+        }
+    }
+
     // MARK: - Relay Listener (handles incoming offers)
 
     private func startRelayListener() {
@@ -360,6 +393,8 @@ public final class WANManager: @unchecked Sendable {
                 switch message {
                 case .offer(let offer):
                     await self.handleIncomingOffer(offer)
+                case .relayOpen(let payload):
+                    await self.handleIncomingRelayOpen(payload)
                 default:
                     break
                 }
@@ -398,7 +433,7 @@ public final class WANManager: @unchecked Sendable {
 
             let connected = ConnectedWANPeer(
                 peerInfo: peerInfo,
-                connection: connection,
+                connection: .direct(connection),
                 connectionType: .direct,
                 lastHeartbeat: Date()
             )
@@ -407,6 +442,52 @@ public final class WANManager: @unchecked Sendable {
             updateState(mapping: state.publicEndpoint, natType: state.natType)
         } catch {
             // Failed to accept incoming connection
+        }
+    }
+
+    private func handleIncomingRelayOpen(_ payload: RelayMessage.RelaySessionPayload) async {
+        guard let relay = relayClient, let config = config else { return }
+        guard payload.toNodeID == config.identity.nodeID else { return }
+        guard connectedPeers.count < config.maxWANPeers else { return }
+        guard connectedPeers[payload.fromNodeID] == nil else { return }
+
+        do {
+            let connection = try await relay.acceptRelayedSession(
+                fromNodeID: payload.fromNodeID,
+                sessionID: payload.sessionID
+            )
+
+            let peerInfo = await discoveryService?.peer(byNodeID: payload.fromNodeID) ?? WANPeerInfo(
+                nodeID: payload.fromNodeID,
+                publicKey: payload.fromNodeID,
+                displayName: "Unknown Peer",
+                capabilities: NodeCapabilities(
+                    hardware: HardwareCapability(
+                        chipFamily: .unknown,
+                        chipName: "Unknown",
+                        totalRAMGB: 0,
+                        gpuCoreCount: 0,
+                        memoryBandwidthGBs: 0,
+                        tier: .tier4
+                    )
+                )
+            )
+
+            let connected = ConnectedWANPeer(
+                peerInfo: peerInfo,
+                connection: .relayed(connection),
+                connectionType: .relayed,
+                lastHeartbeat: Date()
+            )
+            connectedPeers[payload.fromNodeID] = connected
+            startListening(to: connected)
+            updateState(mapping: state.publicEndpoint, natType: state.natType)
+        } catch {
+            await relay.closeRelayedSession(
+                sessionID: payload.sessionID,
+                toNodeID: payload.fromNodeID,
+                notifyRemote: false
+            )
         }
     }
 
@@ -520,5 +601,23 @@ public final class WANManager: @unchecked Sendable {
             self.state.relayStatus = relayStatus
             self.state.discoveredPeerCount = peerCount
         }
+    }
+
+    private func currentCapabilities() -> NodeCapabilities {
+        let hardware = localDeviceInfo?.hardware ?? HardwareCapability(
+            chipFamily: .unknown,
+            chipName: "Unknown",
+            totalRAMGB: 0,
+            gpuCoreCount: 0,
+            memoryBandwidthGBs: 0,
+            tier: .tier4
+        )
+
+        return NodeCapabilities(
+            hardware: hardware,
+            loadedModels: localDeviceInfo?.loadedModels ?? [],
+            maxModelSizeGB: hardware.availableRAMForModelsGB,
+            isAvailable: true
+        )
     }
 }
