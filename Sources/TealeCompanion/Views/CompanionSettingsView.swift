@@ -56,7 +56,7 @@ struct CompanionSettingsView: View {
                     HStack {
                         Text("WAN Relay Server")
                         Spacer()
-                        TextField("https://relay.teale.network", text: Binding(
+                        TextField("wss://teale-relay.fly.dev/ws", text: Binding(
                             get: { appState.wanRelayURL },
                             set: { appState.wanRelayURL = $0 }
                         ))
