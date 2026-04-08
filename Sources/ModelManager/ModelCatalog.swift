@@ -46,6 +46,8 @@ public struct ModelCatalog: Sendable {
             description: "Google's efficient small model, great quality for its size",
             popularityRank: 3
         ),
+        // NOTE: Gemma 4 models require model_type "gemma4" which mlx-swift-lm
+        // does not support yet. Re-add when upstream adds Gemma4Model.
 
         // Medium models — 16GB+ RAM
         ModelDescriptor(
@@ -107,7 +109,7 @@ public struct ModelCatalog: Sendable {
             estimatedSizeGB: 15.0,
             requiredRAMGB: 24.0,
             family: "Gemma",
-            description: "Google's flagship model, strong reasoning and coding",
+            description: "Google's flagship Gemma 3 model, strong reasoning and coding",
             popularityRank: 8
         ),
         ModelDescriptor(

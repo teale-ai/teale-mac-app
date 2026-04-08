@@ -144,6 +144,14 @@ public actor WANDiscoveryService {
         try await relayClient.discover(filter: filter)
     }
 
+    public func setOnPeerDiscovered(_ handler: ((WANPeerInfo) -> Void)?) {
+        onPeerDiscovered = handler
+    }
+
+    public func setOnPeerLeft(_ handler: ((String) -> Void)?) {
+        onPeerLeft = handler
+    }
+
     // MARK: - Private
 
     private func startMessageListener() {

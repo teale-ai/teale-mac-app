@@ -435,7 +435,7 @@ final class ConnectionInfoTests: XCTestCase {
             localPort: 4433,
             natType: .fullCone,
             quicParameters: QUICParameters(
-                alpn: ["solair-wan-1"],
+                alpn: ["teale-wan-1"],
                 certificateFingerprint: "abc123"
             )
         )
@@ -447,6 +447,6 @@ final class ConnectionInfoTests: XCTestCase {
         XCTAssertEqual(decoded.publicPort, 4433)
         XCTAssertEqual(decoded.localIP, "192.168.1.10")
         XCTAssertEqual(decoded.natType, .fullCone)
-        XCTAssertEqual(decoded.quicParameters?.alpn, ["solair-wan-1"])
+        XCTAssertEqual(decoded.quicParameters?.alpn, ["teale-wan-1"])
     }
 }

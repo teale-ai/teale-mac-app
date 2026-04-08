@@ -362,7 +362,7 @@ private struct TransactionRow: View {
 
     private var iconName: String {
         switch transaction.type {
-        case .earned: return "arrow.down.circle.fill"
+        case .earned, .sdkEarning: return "arrow.down.circle.fill"
         case .spent: return "arrow.up.circle.fill"
         case .bonus: return "gift.fill"
         case .adjustment: return "arrow.left.arrow.right"
@@ -372,7 +372,7 @@ private struct TransactionRow: View {
 
     private var iconColor: Color {
         switch transaction.type {
-        case .earned, .bonus: return .green
+        case .earned, .bonus, .sdkEarning: return .green
         case .spent: return .red
         case .adjustment: return .blue
         case .transfer: return isSentTransfer ? .orange : .blue

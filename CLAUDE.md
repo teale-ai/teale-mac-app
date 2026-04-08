@@ -1,4 +1,4 @@
-# Inference Pool (Solair)
+# Inference Pool (Teale)
 
 Decentralized AI inference on Apple Silicon. Native macOS MenuBarExtra app that turns any Mac into a node in a peer-to-peer inference network.
 
@@ -70,11 +70,11 @@ Session notes live in `chats/` as markdown files named by date (e.g. `chats/2026
 - SQL migration at supabase/migrations/001_auth_schema.sql
 
 ### Phase 5 — iOS Companion App (Complete)
-- SolairCompanion executable target (iOS 17+)
-- Thin client — no local inference, talks to Mac nodes via HTTP API
+- TealeCompanion executable target (iOS 17+)
+- Dual-mode: on-device MLX inference + remote via HTTP API
 - Bonjour discovery of LAN Macs, remote inference via URLSession
-- Chat UI, Network view, Wallet view, Settings
-- Depends only on SharedTypes (no MLX/macOS-only deps)
+- Chat UI, Models tab, Network view, Wallet view, Settings
+- On-device inference via MLXInference, ModelManager, InferenceEngine, HardwareProfile
 
 ## Architecture
 
@@ -94,7 +94,7 @@ Session notes live in `chats/` as markdown files named by date (e.g. `chats/2026
 | AuthKit | Supabase auth, device management, Sign in with Apple + Phone OTP |
 | LocalAPI | Hummingbird HTTP server, OpenAI-compatible endpoints |
 | InferencePoolApp | SwiftUI MenuBarExtra app (executable, macOS) |
-| SolairCompanion | iOS companion app (executable, iOS) |
+| TealeCompanion | iOS companion app (executable, iOS) |
 
 ## Key Patterns
 
@@ -109,6 +109,17 @@ Session notes live in `chats/` as markdown files named by date (e.g. `chats/2026
 swift build          # CLI build (works, 86MB binary)
 # Open Package.swift in Xcode for full app experience (MenuBarExtra needs app bundle)
 ```
+
+## Conductor Setup
+
+If you use Conductor for this workspace, set the workspace setup script to:
+
+```bash
+./scripts/conductor-setup.sh
+```
+
+That helper avoids the interactive `zsh` comment parsing issue from pasted multi-line scripts,
+bootstraps `gstack` for Codex, and validates the Swift workspace with `swift build`.
 
 ## Dependencies
 

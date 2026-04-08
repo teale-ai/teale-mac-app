@@ -10,6 +10,7 @@ let package = Package(
     ],
     products: [
         .executable(name: "InferencePoolApp", targets: ["InferencePoolApp"]),
+        .library(name: "TealeSDK", targets: ["TealeSDK", "TealeSDKUI"]),
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.21.0"),
@@ -143,13 +144,43 @@ let package = Package(
             exclude: ["Info.plist", "InferencePool.entitlements"]
         ),
 
-        // MARK: - SolairCompanion (iOS)
+        // MARK: - TealeCompanion (iOS)
         .executableTarget(
-            name: "SolairCompanion",
+            name: "TealeCompanion",
             dependencies: [
                 "SharedTypes",
+                "HardwareProfile",
+                "MLXInference",
+                "ModelManager",
+                "InferenceEngine",
+                "CreditKit",
                 "AgentKit",
                 "AuthKit",
+            ]
+        ),
+
+        // MARK: - TealeSDK (third-party resource contribution SDK)
+        .target(
+            name: "TealeSDK",
+            dependencies: [
+                "SharedTypes",
+                "HardwareProfile",
+                "InferenceEngine",
+                "MLXInference",
+                "WANKit",
+                "CreditKit",
+                "ClusterKit",
+            ]
+        ),
+
+        // MARK: - TealeSDKUI (pre-built SwiftUI views for TealeSDK)
+        .target(
+            name: "TealeSDKUI",
+            dependencies: [
+                "TealeSDK",
+                "SharedTypes",
+                "CreditKit",
+                "HardwareProfile",
             ]
         ),
 
@@ -181,6 +212,10 @@ let package = Package(
         .testTarget(
             name: "AgentKitTests",
             dependencies: ["AgentKit"]
+        ),
+        .testTarget(
+            name: "TealeSDKTests",
+            dependencies: ["TealeSDK"]
         ),
     ]
 )
