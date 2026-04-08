@@ -100,6 +100,18 @@ public struct CreditAnalytics: Sendable {
                 spentCount += 1
                 totalSpentAmount += tx.amount
 
+            case .sdkEarning:
+                dailyEarnings[dayComponents, default: .zero] += tx.amount
+                if tx.timestamp >= sevenDaysAgo {
+                    weeklyEarnings += tx.amount
+                }
+                if tx.timestamp >= thirtyDaysAgo {
+                    monthlyEarnings += tx.amount
+                }
+                if let peer = tx.peerNodeID {
+                    peerEarnings[peer, default: 0] += tx.amount.value
+                }
+
             case .bonus, .adjustment, .transfer:
                 break
             }

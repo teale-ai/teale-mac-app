@@ -1,10 +1,14 @@
 import SwiftUI
 import SharedTypes
+import ModelManager
 
 struct ModelBrowserView: View {
     @Environment(AppState.self) private var appState
     @State private var searchText: String = ""
     @State private var switchConfirmModel: ModelDescriptor?
+    @State private var showLocalModels: Bool = false
+    @State private var showFolderPicker: Bool = false
+    @State private var localModelError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,6 +27,12 @@ struct ModelBrowserView: View {
             // Model list
             ScrollView {
                 LazyVStack(spacing: 1) {
+                    // Local models section
+                    if showLocalModels && !appState.scannedLocalModels.isEmpty {
+                        localModelsSection
+                    }
+
+                    // Catalog models
                     ForEach(filteredModels) { model in
                         ModelRowView(
                             model: model,
@@ -36,12 +46,34 @@ struct ModelBrowserView: View {
 
             Divider()
 
-            // Footer with cache info
+            // Footer
             HStack {
                 Text("\(appState.modelManager.compatibleModels.count) models available for your hardware")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
+
+                // Import local model button
+                Menu {
+                    Button {
+                        appState.scanLocalModels()
+                        showLocalModels = true
+                    } label: {
+                        Label("Scan for Local Models", systemImage: "magnifyingglass")
+                    }
+
+                    Button {
+                        showFolderPicker = true
+                    } label: {
+                        Label("Import from Folder...", systemImage: "folder")
+                    }
+                } label: {
+                    Label("Import", systemImage: "square.and.arrow.down")
+                        .font(.caption)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+
                 Text("\(Int(appState.hardware.availableRAMForModelsGB)) GB available")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -85,7 +117,61 @@ struct ModelBrowserView: View {
                 Text("\(model.name) is ready. Load it now? This will unload the current model.")
             }
         }
+        .alert("Import Error", isPresented: Binding(
+            get: { localModelError != nil },
+            set: { if !$0 { localModelError = nil } }
+        )) {
+            Button("OK") { localModelError = nil }
+        } message: {
+            if let error = localModelError {
+                Text(error)
+            }
+        }
+        .fileImporter(
+            isPresented: $showFolderPicker,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            handleFolderSelection(result)
+        }
     }
+
+    // MARK: - Local Models Section
+
+    @ViewBuilder
+    private var localModelsSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Label("Local Models", systemImage: "internaldrive")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(appState.scannedLocalModels.count) found")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Button {
+                    showLocalModels = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+
+            ForEach(filteredLocalModels) { localModel in
+                LocalModelRowView(localModel: localModel)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+            }
+
+            Divider()
+                .padding(.vertical, 4)
+        }
+    }
+
+    // MARK: - Filtering
 
     private var filteredModels: [ModelDescriptor] {
         let models = appState.modelManager.compatibleModels
@@ -95,9 +181,118 @@ struct ModelBrowserView: View {
             $0.family.localizedCaseInsensitiveContains(searchText)
         }
     }
+
+    private var filteredLocalModels: [LocalModelInfo] {
+        if searchText.isEmpty { return appState.scannedLocalModels }
+        return appState.scannedLocalModels.filter {
+            $0.name.localizedCaseInsensitiveContains(searchText)
+        }
+    }
+
+    // MARK: - Folder Selection
+
+    private func handleFolderSelection(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+
+            // Start accessing security-scoped resource
+            guard url.startAccessingSecurityScopedResource() else {
+                localModelError = "Could not access the selected folder."
+                return
+            }
+            defer { url.stopAccessingSecurityScopedResource() }
+
+            let scanner = LocalModelScanner()
+            if let localModel = scanner.validateDirectory(url) {
+                Task { await appState.loadLocalModel(localModel) }
+            } else {
+                localModelError = "The selected folder doesn't contain a valid MLX model. Expected safetensors files and config.json."
+            }
+        case .failure(let error):
+            localModelError = error.localizedDescription
+        }
+    }
 }
 
-// MARK: - Model Row
+// MARK: - Local Model Row
+
+struct LocalModelRowView: View {
+    @Environment(AppState.self) private var appState
+    let localModel: LocalModelInfo
+    @State private var error: String?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(localModel.name)
+                        .font(.body.bold())
+                    sourceBadge
+                }
+
+                Text(localModel.path.path)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                HStack(spacing: 8) {
+                    if let config = localModel.configJSON {
+                        Label(config.parameterCountString, systemImage: "cpu")
+                        if let type = config.modelType {
+                            Label(type, systemImage: "brain")
+                        }
+                    }
+                    Label(String(format: "%.1f GB", localModel.sizeGB), systemImage: "externaldrive")
+                }
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            }
+
+            Spacer()
+
+            Button("Load") {
+                Task {
+                    error = nil
+                    await appState.loadLocalModel(localModel)
+                    if case .error(let msg) = appState.engineStatus {
+                        error = msg
+                    }
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+
+        if let error {
+            Text(error)
+                .font(.caption)
+                .foregroundStyle(.red)
+        }
+    }
+
+    private var sourceBadge: some View {
+        let (text, color): (String, Color) = {
+            switch localModel.source {
+            case .huggingFaceCache: return ("HF", .blue)
+            case .lmStudio: return ("LMS", .purple)
+            case .tealeCache: return ("TEALE", .green)
+            case .custom: return ("LOCAL", .orange)
+            }
+        }()
+        return Text(text)
+            .font(.caption2.weight(.medium))
+            .fixedSize()
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.2))
+            .foregroundStyle(color)
+            .clipShape(Capsule())
+    }
+}
+
+// MARK: - Model Row (catalog models)
 
 struct ModelRowView: View {
     @Environment(AppState.self) private var appState

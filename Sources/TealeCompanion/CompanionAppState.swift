@@ -3,6 +3,10 @@ import SharedTypes
 import Network
 import Observation
 import AuthKit
+import HardwareProfile
+import MLXInference
+import ModelManager
+import InferenceEngine
 
 // MARK: - Connection Status
 
@@ -25,6 +29,13 @@ enum ConnectionStatus: Sendable {
         case .error(let msg): return "Error: \(msg)"
         }
     }
+}
+
+// MARK: - Inference Mode
+
+enum InferenceMode: String, CaseIterable {
+    case local = "On-Device"
+    case remote = "Remote"
 }
 
 // MARK: - Discovered Node
@@ -83,7 +94,22 @@ final class CompanionAppState {
     // Auth (initialized lazily on MainActor in initialize())
     var authManager: AuthManager?
 
-    // Connection
+    // Hardware
+    let hardware: HardwareCapability
+    let modelManager: ModelManagerService
+
+    // Local inference
+    let localProvider = MLXProvider()
+    var inferenceMode: InferenceMode = .local
+    var localModel: ModelDescriptor?
+    var isLoadingModel: Bool = false
+    var loadingPhase: String = ""
+    var loadingProgress: Double?
+    var isGenerating: Bool = false
+    var downloadedModelIDs: Set<String> = []
+    var activeDownloads: [String: Double] = [:]
+
+    // Remote connection
     var connectionStatus: ConnectionStatus = .disconnected
     var discoveredNodes: [DiscoveredNode] = []
     var connectedNode: DiscoveredNode?
@@ -108,7 +134,21 @@ final class CompanionAppState {
     private var browser: NWBrowser?
     private var client = RemoteInferenceClient()
 
-    // MARK: - Discovery
+    init() {
+        let hw = HardwareDetector().detect()
+        self.hardware = hw
+        self.modelManager = ModelManagerService(hardware: hw, maxStorageGB: 20.0)
+    }
+
+    /// Whether inference is available (local model loaded or remote connected)
+    var canInfer: Bool {
+        switch inferenceMode {
+        case .local: return localModel != nil
+        case .remote: return connectionStatus.isConnected
+        }
+    }
+
+    // MARK: - Initialization
 
     @MainActor
     func initialize() async {
@@ -117,8 +157,76 @@ final class CompanionAppState {
             self.authManager = manager
             await manager.checkSession()
         }
+
+        // Scan for already-downloaded models
+        await refreshDownloadedModels()
+
+        // Start network discovery in background
         await startDiscovery()
     }
+
+    // MARK: - Local Model Management
+
+    @MainActor
+    func downloadModel(_ descriptor: ModelDescriptor) async {
+        activeDownloads[descriptor.id] = 0.0
+        do {
+            try await modelManager.downloadModel(descriptor)
+            activeDownloads.removeValue(forKey: descriptor.id)
+            await refreshDownloadedModels()
+        } catch {
+            activeDownloads.removeValue(forKey: descriptor.id)
+        }
+    }
+
+    @MainActor
+    func loadLocalModel(_ descriptor: ModelDescriptor) async {
+        isLoadingModel = true
+        loadingPhase = "Preparing..."
+        loadingProgress = 0
+
+        do {
+            try await localProvider.loadModel(descriptor) { [weak self] progress in
+                Task { @MainActor in
+                    self?.loadingPhase = progress.phase.rawValue
+                    self?.loadingProgress = progress.fractionCompleted
+                }
+            }
+
+            localModel = descriptor
+            selectedModel = descriptor.name
+            inferenceMode = .local
+            isLoadingModel = false
+            loadingPhase = ""
+            loadingProgress = nil
+        } catch {
+            isLoadingModel = false
+            loadingPhase = ""
+            loadingProgress = nil
+        }
+    }
+
+    @MainActor
+    func unloadLocalModel() async {
+        await localProvider.unloadModel()
+        localModel = nil
+        if inferenceMode == .local {
+            selectedModel = nil
+        }
+    }
+
+    @MainActor
+    func refreshDownloadedModels() async {
+        var ids = Set<String>()
+        for model in modelManager.compatibleModels {
+            if await modelManager.isDownloaded(model) {
+                ids.insert(model.id)
+            }
+        }
+        downloadedModelIDs = ids
+    }
+
+    // MARK: - Discovery
 
     func startDiscovery() async {
         let browser = NWBrowser(for: .bonjour(type: "_teale._tcp", domain: "local."), using: .tcp)
@@ -173,7 +281,7 @@ final class CompanionAppState {
         self.discoveredNodes = nodes
     }
 
-    // MARK: - Connection
+    // MARK: - Remote Connection
 
     @MainActor
     func connect(to node: DiscoveredNode) async {
@@ -212,12 +320,10 @@ final class CompanionAppState {
         }
     }
 
-    // MARK: - Chat
+    // MARK: - Chat (dual-mode: local or remote)
 
     @MainActor
     func sendMessage(_ content: String) async {
-        guard connectionStatus.isConnected else { return }
-
         let conversation = conversationStore.activeConversation
         ?? conversationStore.createConversation(title: String(content.prefix(40)))
         conversationStore.activeConversation = conversation
@@ -240,14 +346,53 @@ final class CompanionAppState {
             stream: true
         )
 
+        switch inferenceMode {
+        case .local:
+            await sendLocalMessage(request: request, assistantMessage: assistantMessage, conversationID: conversation.id)
+        case .remote:
+            await sendRemoteMessage(request: request, assistantMessage: assistantMessage, conversationID: conversation.id)
+        }
+    }
+
+    // MARK: - Local Generation
+
+    @MainActor
+    private func sendLocalMessage(request: ChatCompletionRequest, assistantMessage: CompanionMessage, conversationID: UUID) async {
+        guard localModel != nil else { return }
+        isGenerating = true
+
         do {
-            for try await token in client.streamCompletion(request: request) {
-                conversationStore.appendToMessage(assistantMessage.id, in: conversation.id, content: token)
+            let stream = localProvider.generate(request: request)
+            for try await chunk in stream {
+                if let content = chunk.choices.first?.delta.content {
+                    conversationStore.appendToMessage(assistantMessage.id, in: conversationID, content: content)
+                }
             }
         } catch {
             conversationStore.appendToMessage(
                 assistantMessage.id,
-                in: conversation.id,
+                in: conversationID,
+                content: "\n\n[Error: \(error.localizedDescription)]"
+            )
+        }
+
+        isGenerating = false
+    }
+
+    // MARK: - Remote Generation
+
+    @MainActor
+    private func sendRemoteMessage(request: ChatCompletionRequest, assistantMessage: CompanionMessage, conversationID: UUID) async {
+        guard connectionStatus.isConnected else { return }
+
+        do {
+            for try await token in client.streamCompletion(request: request) {
+                conversationStore.appendToMessage(assistantMessage.id, in: conversationID, content: token)
+            }
+        } catch {
+            conversationStore.appendToMessage(
+                assistantMessage.id,
+                in: conversationID,
                 content: "\n\n[Error: \(error.localizedDescription)]"
             )
         }

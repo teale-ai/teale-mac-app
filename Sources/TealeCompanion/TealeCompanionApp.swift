@@ -3,7 +3,7 @@ import SharedTypes
 import AuthKit
 
 @main
-struct SolairCompanionApp: App {
+struct TealeCompanionApp: App {
     @State private var appState = CompanionAppState()
 
     var body: some Scene {
@@ -15,6 +15,14 @@ struct SolairCompanionApp: App {
                             .tabItem {
                                 Label("Chat", systemImage: "bubble.left.and.bubble.right")
                             }
+
+                        NavigationStack {
+                            LocalModelsView()
+                        }
+                        .environment(appState)
+                        .tabItem {
+                            Label("Models", systemImage: "cpu")
+                        }
 
                         NetworkView(appState: appState)
                             .tabItem {

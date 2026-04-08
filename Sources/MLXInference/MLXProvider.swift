@@ -95,6 +95,36 @@ public actor MLXProvider: InferenceProvider {
         }
     }
 
+    // MARK: - Load Model from Local Directory
+
+    /// Load a model directly from a local directory (no download).
+    /// The directory must contain safetensors + config.json + tokenizer files.
+    public func loadLocalModel(from directory: URL, descriptor: ModelDescriptor, onProgress: LoadProgressCallback? = nil) async throws {
+        if let current = currentDescriptor, current.id != descriptor.id {
+            await unloadModel()
+        }
+
+        _status = .loadingModel(descriptor)
+        onProgress?(LoadProgress(phase: .loadingWeights, fractionCompleted: 0))
+
+        do {
+            let container = try await LLMModelFactory.shared.loadContainer(
+                from: directory,
+                using: HFTokenizerLoader()
+            )
+
+            onProgress?(LoadProgress(phase: .warmup, fractionCompleted: 0.9))
+
+            self.modelContainer = container
+            self.currentDescriptor = descriptor
+            _status = .ready(descriptor)
+            onProgress?(LoadProgress(phase: .warmup, fractionCompleted: 1.0))
+        } catch {
+            _status = .error("Failed to load local model at \(directory.path): \(error.localizedDescription)")
+            throw error
+        }
+    }
+
     // MARK: - Unload Model
 
     public func unloadModel() async {
