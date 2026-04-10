@@ -29,6 +29,11 @@ public actor WireGuardPeerConnection {
     // Fragment reassembly
     private var fragments: [UInt32: FragmentBuffer] = [:]
 
+    // NAT keepalive
+    private var lastSendTime: Date = Date()
+    private var keepaliveTask: Task<Void, Never>?
+    private static let keepaliveIntervalSeconds: TimeInterval = 20
+
     /// Create a connection as initiator (remote WG public key known from discovery).
     public init(
         connection: NWConnection,
@@ -77,6 +82,7 @@ public actor WireGuardPeerConnection {
         do {
             try await performHandshake()
             receiveLoop()
+            startKeepaliveLoop()
         } catch {
             connectionState = .failed("Handshake failed: \(error.localizedDescription)")
             messageContinuation?.finish()
@@ -140,8 +146,32 @@ public actor WireGuardPeerConnection {
     /// Cancel the connection.
     public func cancel() {
         connectionState = .disconnected
+        keepaliveTask?.cancel()
+        keepaliveTask = nil
         udpConnection.cancel()
         messageContinuation?.finish()
+    }
+
+    // MARK: - NAT Keepalive
+
+    private func startKeepaliveLoop() {
+        keepaliveTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.keepaliveIntervalSeconds))
+                guard let self, case .connected = await self.connectionState else { return }
+
+                let elapsed = Date().timeIntervalSince(await self.lastSendTime)
+                if elapsed >= Self.keepaliveIntervalSeconds {
+                    // Send an empty keepalive packet (type 0x03)
+                    try? await self.sendUDP(Data([0x03]))
+                    await self.updateLastSendTime()
+                }
+            }
+        }
+    }
+
+    private func updateLastSendTime() {
+        lastSendTime = Date()
     }
 
     // MARK: - Noise Handshake
@@ -226,6 +256,7 @@ public actor WireGuardPeerConnection {
                 }
             )
         }
+        lastSendTime = Date()
     }
 
     private func receiveUDP(timeout: TimeInterval) async throws -> Data {

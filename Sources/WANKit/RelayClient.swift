@@ -23,14 +23,16 @@ public enum RelayMessage: Codable, Sendable {
 
     public struct RegisterPayload: Codable, Sendable {
         public var nodeID: String
-        public var publicKey: String  // hex-encoded
+        public var publicKey: String  // hex-encoded Ed25519 signing key
+        public var wgPublicKey: String?  // hex-encoded Curve25519 KeyAgreement key for WireGuard
         public var displayName: String
         public var capabilities: NodeCapabilities
         public var signature: String  // hex-encoded signature of nodeID
 
-        public init(nodeID: String, publicKey: String, displayName: String, capabilities: NodeCapabilities, signature: String) {
+        public init(nodeID: String, publicKey: String, wgPublicKey: String? = nil, displayName: String, capabilities: NodeCapabilities, signature: String) {
             self.nodeID = nodeID
             self.publicKey = publicKey
+            self.wgPublicKey = wgPublicKey
             self.displayName = displayName
             self.capabilities = capabilities
             self.signature = signature
@@ -330,6 +332,7 @@ public actor RelayClient {
         let payload = RelayMessage.RegisterPayload(
             nodeID: identity.nodeID,
             publicKey: identity.nodeID,  // nodeID is already the hex public key
+            wgPublicKey: identity.wgPublicKeyHex,
             displayName: config.displayName,
             capabilities: capabilities,
             signature: signatureHex

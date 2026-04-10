@@ -74,6 +74,38 @@ struct ConnectedWANPeer: Sendable {
     var connectionType: WANConnectionType
     var lastHeartbeat: Date
     var latencyMs: Double?
+
+    /// Quality score (0-100) for routing decisions. Higher is better.
+    var qualityScore: Double {
+        var score: Double = 50
+
+        // Latency: lower is better (0-30 points)
+        if let latency = latencyMs {
+            if latency < 50 { score += 30 }
+            else if latency < 150 { score += 20 }
+            else if latency < 500 { score += 10 }
+        }
+
+        // Connection type: direct is better (0-20 points)
+        if connectionType == .direct { score += 20 }
+
+        // RAM: more is better (0-20 points)
+        let ram = peerInfo.capabilities.hardware.totalRAMGB
+        if ram >= 64 { score += 20 }
+        else if ram >= 32 { score += 15 }
+        else if ram >= 16 { score += 10 }
+        else if ram >= 8 { score += 5 }
+
+        // Has models loaded (0-10 points)
+        if !peerInfo.capabilities.loadedModels.isEmpty { score += 10 }
+
+        // Freshness penalty
+        let staleness = Date().timeIntervalSince(lastHeartbeat)
+        if staleness > 60 { score -= 20 }
+        else if staleness > 30 { score -= 10 }
+
+        return max(0, min(100, score))
+    }
 }
 
 // MARK: - WAN Manager
@@ -299,9 +331,28 @@ public final class WANManager: @unchecked Sendable {
         connectedPeers.values.contains { $0.peerInfo.hasModel(modelID) }
     }
 
-    /// Get the transport connection for a connected peer with the given model
+    /// Get the best transport connection for a connected peer with the given model
     public func connectionForPeer(withModel modelID: String) -> WANTransportConnection? {
-        connectedPeers.values.first { $0.peerInfo.hasModel(modelID) }?.connection
+        connectedPeers.values
+            .filter { $0.peerInfo.hasModel(modelID) }
+            .sorted { $0.qualityScore > $1.qualityScore }
+            .first?.connection
+    }
+
+    /// Get any available connected peer's connection (best quality first)
+    public func anyAvailableConnection() -> WANTransportConnection? {
+        connectedPeers.values
+            .filter { $0.peerInfo.capabilities.isAvailable }
+            .sorted { $0.qualityScore > $1.qualityScore }
+            .first?.connection
+    }
+
+    /// Get all available connections for failover (ordered by quality score, best first)
+    public func allAvailableConnections() -> [WANTransportConnection] {
+        connectedPeers.values
+            .filter { $0.peerInfo.capabilities.isAvailable }
+            .sorted { $0.qualityScore > $1.qualityScore }
+            .map(\.connection)
     }
 
     /// Force a relay re-registration and peer discovery refresh.
@@ -329,14 +380,25 @@ public final class WANManager: @unchecked Sendable {
     // MARK: - Message Handling
 
     private func startListening(to peer: ConnectedWANPeer) {
-        Task {
+        Task { [weak self] in
             let messages = await peer.connection.incomingMessages
             for await message in messages {
-                await handleMessage(message, from: peer)
+                guard let self else { return }
+                await self.handleMessage(message, from: peer)
             }
-            // Connection ended
-            connectedPeers.removeValue(forKey: peer.peerInfo.nodeID)
-            updateState(mapping: state.publicEndpoint, natType: state.natType)
+            // Connection ended — attempt reconnect after a delay
+            guard let self else { return }
+            let nodeID = peer.peerInfo.nodeID
+            self.connectedPeers.removeValue(forKey: nodeID)
+            self.updateState(mapping: self.state.publicEndpoint, natType: self.state.natType)
+
+            // Try to reconnect if WAN is still enabled and we know this peer
+            guard self.isEnabled else { return }
+            try? await Task.sleep(for: .seconds(5))
+            guard self.isEnabled, self.connectedPeers[nodeID] == nil else { return }
+            if let peerInfo = await self.discoveryService?.peer(byNodeID: nodeID) {
+                try? await self.connectToPeer(peerInfo)
+            }
         }
     }
 
@@ -368,10 +430,20 @@ public final class WANManager: @unchecked Sendable {
         }
     }
 
+    /// Peers known to be reachable on LAN (set by AppState when cluster is enabled).
+    /// WAN auto-connect skips these to prefer the faster LAN path.
+    public var lanPeerNodeIDs: Set<String> = []
+
     private func handleDiscoveredPeer(_ peer: WANPeerInfo) async {
         guard let config else { return }
         guard peer.nodeID != config.identity.nodeID else { return }
         guard connectedPeers[peer.nodeID] == nil else { return }
+        // Only auto-connect to peers that advertise a WG public key (needed for Noise handshake)
+        guard peer.wgPublicKey != nil else { return }
+        // Only auto-connect if peer has models loaded or is available
+        guard peer.capabilities.isAvailable else { return }
+        // Skip peers already reachable on LAN (prefer faster path)
+        guard !lanPeerNodeIDs.contains(peer.nodeID) else { return }
 
         do {
             try await connectToPeer(peer)
