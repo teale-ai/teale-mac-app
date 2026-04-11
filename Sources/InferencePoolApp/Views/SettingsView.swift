@@ -17,6 +17,8 @@ struct SettingsView: View {
     @State private var orgReservation: Double = 60
     @State private var exoBaseURL: String = "http://localhost:52415"
     @State private var exoPreferredModelID: String = ""
+    @State private var wanRelayURL: String = "wss://teale-relay.fly.dev/ws"
+    @State private var maxStorage: Double = 50
 
     var body: some View {
         @Bindable var state = appState
@@ -241,9 +243,9 @@ struct SettingsView: View {
                         .foregroundStyle(.red)
                 }
 
-                LabeledContent("Relay", value: wanState.relayStatus.displayName)
+                LabeledContent("Relay", value: appState.wanManager.state.relayStatus.displayName)
                     .font(.caption)
-                LabeledContent("NAT Type", value: wanState.natType.displayName)
+                LabeledContent("NAT Type", value: appState.wanManager.state.natType.displayName)
                     .font(.caption)
             }
 

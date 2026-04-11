@@ -143,8 +143,8 @@ public final class AppState {
             Task { await modelManager.cache.setMaxStorage(maxStorageGB) }
         }
     }
-    public var wanRelayURL: String = UserDefaults.standard.string(forKey: Self.wanRelayURLKey) ?? "wss://teale-relay.fly.dev/ws" {
-        didSet { UserDefaults.standard.set(wanRelayURL, forKey: Self.wanRelayURLKey) }
+    public var wanRelayURL: String = UserDefaults.standard.string(forKey: "teale.wan_relay_url") ?? "wss://teale-relay.fly.dev/ws" {
+        didSet { UserDefaults.standard.set(wanRelayURL, forKey: "teale.wan_relay_url") }
     }
     public var autoManageModels: Bool = false {
         didSet { demandTracker.autoManageEnabled = autoManageModels }

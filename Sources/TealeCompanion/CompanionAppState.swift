@@ -152,6 +152,7 @@ final class CompanionAppState {
     private var browser: NWBrowser?
     private var client = RemoteInferenceClient()
 
+    @MainActor
     init() {
         let hw = HardwareDetector().detect()
         self.hardware = hw
