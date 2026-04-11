@@ -13,6 +13,8 @@ public struct WANPeerInfo: Codable, Sendable, Identifiable {
     public var lastSeen: Date
     public var natType: NATType
     public var endpoints: [PeerEndpoint]
+    /// Organization/group ID for group-first routing (matches ClusterKit's organizationID)
+    public var organizationID: String?
 
     public init(
         nodeID: String,
@@ -22,7 +24,8 @@ public struct WANPeerInfo: Codable, Sendable, Identifiable {
         capabilities: NodeCapabilities,
         lastSeen: Date = Date(),
         natType: NATType = .unknown,
-        endpoints: [PeerEndpoint] = []
+        endpoints: [PeerEndpoint] = [],
+        organizationID: String? = nil
     ) {
         self.nodeID = nodeID
         self.publicKey = publicKey
@@ -32,6 +35,7 @@ public struct WANPeerInfo: Codable, Sendable, Identifiable {
         self.lastSeen = lastSeen
         self.natType = natType
         self.endpoints = endpoints
+        self.organizationID = organizationID
     }
 
     /// Whether this peer has a specific model loaded

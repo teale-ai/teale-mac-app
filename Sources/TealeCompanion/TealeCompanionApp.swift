@@ -54,8 +54,12 @@ struct TealeCompanionApp: App {
                 if url.scheme == "teale", url.host == "invite",
                    let code = url.pathComponents.last {
                     Task {
-                        if let conversationID = try? await appState.chatService?.invitationService.redeemInvitation(code: code) {
-                            await appState.chatService?.loadConversations()
+                        // P2P invitation handling — decode invite token and join group
+                        let invitation = InvitationService(currentUserID: appState.currentUserID ?? UUID())
+                        if let invite = invitation.decode(code) {
+                            if let _ = await appState.chatService?.createGroup(title: invite.groupTitle, memberIDs: []) {
+                                await appState.chatService?.loadConversations()
+                            }
                         }
                     }
                 }

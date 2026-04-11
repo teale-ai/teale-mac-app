@@ -12,6 +12,9 @@ public struct ChatCompletionRequest: Codable, Sendable {
     public var stop: [String]?
     public var presencePenalty: Double?
     public var frequencyPenalty: Double?
+    /// Optional group ID for group-first inference routing.
+    /// When set, the provider chain prioritizes group members' devices.
+    public var groupID: String?
 
     enum CodingKeys: String, CodingKey {
         case model, messages, temperature, stream, stop
@@ -19,6 +22,7 @@ public struct ChatCompletionRequest: Codable, Sendable {
         case maxTokens = "max_tokens"
         case presencePenalty = "presence_penalty"
         case frequencyPenalty = "frequency_penalty"
+        case groupID = "group_id"
     }
 
     public init(

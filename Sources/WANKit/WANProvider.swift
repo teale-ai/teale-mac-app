@@ -104,7 +104,8 @@ public actor WANProvider: InferenceProvider {
         }
 
         // Otherwise route to a connected WAN peer if one is serving a suitable model.
-        if let peer = wanManager.connectedPeerForInference(preferredModel: requestedModel) {
+        // Group-first: if groupID is set, prefer group peers.
+        if let peer = wanManager.connectedPeerForInference(preferredModel: requestedModel, groupID: request.groupID) {
             do {
                 var proxiedRequest = request
                 proxiedRequest.model = proxiedRequest.model ?? peer.peerInfo.capabilities.loadedModels.first

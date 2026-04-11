@@ -21,10 +21,9 @@ public final class AIParticipant {
 
     // MARK: - Should Respond
 
-    /// Determine if the AI agent should respond to a new message.
-    /// Default behavior: agent sits in the background until mentioned.
+    /// Determine if the AI agent should respond to a new decrypted message.
     public func shouldRespond(
-        to message: Message,
+        to message: DecryptedMessage,
         config: AgentConfig,
         currentUserID: UUID
     ) -> Bool {
@@ -51,7 +50,7 @@ public final class AIParticipant {
     /// Returns the full response text, or nil if inference is unavailable.
     public func generateResponse(
         conversation: Conversation,
-        messages: [Message],
+        messages: [DecryptedMessage],
         participants: [ParticipantInfo],
         tools: [ConversationToolSummary]
     ) async -> String? {
@@ -91,7 +90,7 @@ public final class AIParticipant {
 
     private func buildRequest(
         conversation: Conversation,
-        messages: [Message],
+        messages: [DecryptedMessage],
         participants: [ParticipantInfo],
         tools: [ConversationToolSummary]
     ) -> ChatCompletionRequest {

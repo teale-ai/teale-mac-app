@@ -129,15 +129,13 @@ let package = Package(
             ]
         ),
 
-        // MARK: - ChatKit (group chat with AI agents)
+        // MARK: - ChatKit (P2P encrypted group chat — zero central storage)
         .target(
             name: "ChatKit",
             dependencies: [
                 "SharedTypes",
-                "AuthKit",
                 "CreditKit",
                 "AgentKit",
-                .product(name: "Supabase", package: "supabase-swift"),
             ]
         ),
 

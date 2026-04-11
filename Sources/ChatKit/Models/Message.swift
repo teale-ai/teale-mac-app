@@ -94,12 +94,17 @@ public enum MessageMetadata: Codable, Sendable, Equatable {
 
 // MARK: - Message
 
+/// All messages are E2E encrypted. The `encryptedContent` field holds a base64-encoded
+/// `EncryptedPayload` that can only be decrypted with the matching sender key.
 public struct Message: Codable, Sendable, Identifiable, Equatable {
     public var id: UUID
     public var conversationID: UUID
     /// nil = AI agent message
     public var senderID: UUID?
-    public var content: String
+    /// Base64-encoded EncryptedPayload. Decrypt with the sender key matching `encryptionKeyID`.
+    public var encryptedContent: String
+    /// The sender key ID used to encrypt this message.
+    public var encryptionKeyID: String
     public var messageType: MessageType
     public var replyToID: UUID?
     public var createdAt: Date
@@ -111,7 +116,8 @@ public struct Message: Codable, Sendable, Identifiable, Equatable {
         id: UUID = UUID(),
         conversationID: UUID,
         senderID: UUID?,
-        content: String,
+        encryptedContent: String,
+        encryptionKeyID: String,
         messageType: MessageType = .text,
         replyToID: UUID? = nil,
         createdAt: Date = Date(),
@@ -120,7 +126,8 @@ public struct Message: Codable, Sendable, Identifiable, Equatable {
         self.id = id
         self.conversationID = conversationID
         self.senderID = senderID
-        self.content = content
+        self.encryptedContent = encryptedContent
+        self.encryptionKeyID = encryptionKeyID
         self.messageType = messageType
         self.replyToID = replyToID
         self.createdAt = createdAt
@@ -131,10 +138,32 @@ public struct Message: Codable, Sendable, Identifiable, Equatable {
         case id
         case conversationID = "conversation_id"
         case senderID = "sender_id"
-        case content
+        case encryptedContent = "encrypted_content"
+        case encryptionKeyID = "encryption_key_id"
         case messageType = "message_type"
         case replyToID = "reply_to_id"
         case createdAt = "created_at"
         case editedAt = "edited_at"
+    }
+}
+
+// MARK: - Decrypted Message
+
+/// A decrypted message for display in the UI.
+public struct DecryptedMessage: Identifiable, Equatable {
+    public let message: Message
+    public let content: String
+
+    public var id: UUID { message.id }
+    public var conversationID: UUID { message.conversationID }
+    public var senderID: UUID? { message.senderID }
+    public var messageType: MessageType { message.messageType }
+    public var replyToID: UUID? { message.replyToID }
+    public var createdAt: Date { message.createdAt }
+    public var isFromAgent: Bool { message.isFromAgent }
+
+    public init(message: Message, content: String) {
+        self.message = message
+        self.content = content
     }
 }

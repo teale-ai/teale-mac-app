@@ -1,13 +1,11 @@
 import Foundation
-import Supabase
-import Auth
-import AuthKit
 import SharedTypes
 
-// MARK: - Chat Service
+// MARK: - Chat Service (P2P, zero central storage)
 
-/// Main orchestrator for Supabase-backed conversations with AI agents.
-/// Manages conversations, messages, participants, and realtime sync.
+/// Orchestrates E2E encrypted group conversations over P2P transport.
+/// All messages are stored locally and synced device-to-device.
+/// No data ever touches a central server.
 @MainActor
 @Observable
 public final class ChatService {
@@ -15,107 +13,79 @@ public final class ChatService {
 
     public private(set) var conversations: [Conversation] = []
     public private(set) var activeConversation: Conversation?
-    public private(set) var activeMessages: [Message] = []
+    public private(set) var activeMessages: [DecryptedMessage] = []
     public private(set) var activeParticipants: [ParticipantInfo] = []
-    public private(set) var isLoadingConversations: Bool = false
     public private(set) var isLoadingMessages: Bool = false
     public private(set) var isSending: Bool = false
 
     // MARK: - Dependencies
 
-    private let client: SupabaseClient
     private let currentUserID: UUID
-    private let realtimeService: RealtimeService
+    private let localNodeID: String
+    public let keyManager: GroupKeyManager
+    public let messageStore: MessageStore
+    public let outbox: MessageOutbox
+    public let syncService: MessageSyncService
+    public let configStore: GroupConfigStore
     public let aiParticipant: AIParticipant
-    public let invitationService: InvitationService
+
+    /// Callback to broadcast a message to connected group peers.
+    /// Set by the app layer (wired to ClusterKit/WANKit transport).
+    public var onBroadcast: ((_ data: Data, _ groupID: UUID) async -> Void)?
 
     // MARK: - Init
 
-    public init(config: SupabaseConfig, currentUserID: UUID) {
-        self.client = SupabaseClient(
-            supabaseURL: config.url,
-            supabaseKey: config.anonKey,
-            options: SupabaseClientOptions(
-                auth: .init(storage: ChatFileStorage())
-            )
-        )
+    public init(currentUserID: UUID, localNodeID: String) {
         self.currentUserID = currentUserID
-        self.realtimeService = RealtimeService(client: client)
+        self.localNodeID = localNodeID
+        self.keyManager = GroupKeyManager(memberID: currentUserID)
+        self.messageStore = MessageStore()
+        self.outbox = MessageOutbox()
+        self.syncService = MessageSyncService(messageStore: messageStore, outbox: outbox)
+        self.configStore = GroupConfigStore()
         self.aiParticipant = AIParticipant()
-        self.invitationService = InvitationService(client: client, currentUserID: currentUserID)
     }
 
     // MARK: - Conversation List
 
-    /// Fetch all conversations the current user participates in
+    /// Load conversations from local storage.
     public func loadConversations() async {
-        isLoadingConversations = true
-        defer { isLoadingConversations = false }
-
-        do {
-            let result: [Conversation] = try await client
-                .from("conversations")
-                .select()
-                .order("last_message_at", ascending: false)
-                .execute()
-                .value
-
-            conversations = result
-        } catch {
-            // Silently fail — conversations stay empty
+        // Conversations are stored as a simple JSON list locally
+        let file = Self.conversationsFile
+        guard let data = try? Data(contentsOf: file) else {
+            conversations = []
+            return
         }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        conversations = (try? decoder.decode([Conversation].self, from: data)) ?? []
+    }
+
+    /// Save conversations list to local storage.
+    private func saveConversations() {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(conversations) else { return }
+        let dir = Self.conversationsFile.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? data.write(to: Self.conversationsFile, options: .atomic)
     }
 
     // MARK: - Open Conversation
 
-    /// Open a conversation and subscribe to realtime updates
+    /// Open a conversation and load messages from local store.
     public func openConversation(_ conversation: Conversation) async {
         activeConversation = conversation
         isLoadingMessages = true
 
-        // Load messages
-        do {
-            let messages: [Message] = try await client
-                .from("messages")
-                .select()
-                .eq("conversation_id", value: conversation.id.uuidString)
-                .order("created_at", ascending: true)
-                .limit(100)
-                .execute()
-                .value
-
-            activeMessages = messages
-        } catch {
-            activeMessages = []
-        }
-
-        // Load participants with display names
-        await loadParticipants(for: conversation.id)
-
+        // Load encrypted messages from local store
+        let stored = await messageStore.loadMessages(groupID: conversation.id)
+        activeMessages = await decryptMessages(stored, groupID: conversation.id)
         isLoadingMessages = false
-
-        // Subscribe to new messages via realtime
-        await realtimeService.subscribeToMessages(
-            conversationID: conversation.id
-        ) { [weak self] message in
-            Task { @MainActor in
-                guard let self, self.activeConversation?.id == message.conversationID else { return }
-                // Append if not already present (avoid duplicates from own sends)
-                if !self.activeMessages.contains(where: { $0.id == message.id }) {
-                    self.activeMessages.append(message)
-                }
-            }
-        }
-
-        // Mark as read
-        await markAsRead(conversation.id)
     }
 
-    /// Close the current conversation and unsubscribe from realtime
-    public func closeConversation() async {
-        if let id = activeConversation?.id {
-            await realtimeService.unsubscribeFromMessages(conversationID: id)
-        }
+    /// Close the current conversation.
+    public func closeConversation() {
         activeConversation = nil
         activeMessages = []
         activeParticipants = []
@@ -123,7 +93,7 @@ public final class ChatService {
 
     // MARK: - Send Message
 
-    /// Send a text message in the active conversation
+    /// Encrypt, store locally, and broadcast a message to group peers.
     public func sendMessage(_ content: String) async {
         guard let conversation = activeConversation else { return }
         guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -131,223 +101,197 @@ public final class ChatService {
         isSending = true
         defer { isSending = false }
 
-        let message = Message(
-            conversationID: conversation.id,
-            senderID: currentUserID,
-            content: content,
-            messageType: .text
-        )
-
         do {
-            // Insert to Supabase — realtime will broadcast to other participants
-            try await client
-                .from("messages")
-                .insert(message)
-                .execute()
+            var senderKey = await keyManager.mySenderKey(for: conversation.id)
+            let payload = try GroupCrypto.encrypt(content, using: &senderKey)
+            // Persist ratcheted key state
+            await keyManager.storeSenderKey(senderKey, for: conversation.id)
 
-            // Optimistically add to local state
-            if !activeMessages.contains(where: { $0.id == message.id }) {
-                activeMessages.append(message)
+            let stored = StoredMessage(
+                conversationID: conversation.id,
+                senderNodeID: localNodeID,
+                senderID: currentUserID,
+                payload: payload,
+                messageType: .text
+            )
+
+            // Store locally
+            await messageStore.append(stored, groupID: conversation.id)
+            await syncService.recordMessage(
+                groupID: conversation.id,
+                senderNodeID: localNodeID,
+                timestamp: stored.timestamp
+            )
+
+            // Broadcast to peers
+            let data = try JSONEncoder().encode(GroupMessagePayload(message: stored))
+            await onBroadcast?(data, conversation.id)
+
+            // Add to active view
+            let decrypted = DecryptedMessage(message: stored.toMessage(), content: content)
+            if !activeMessages.contains(where: { $0.id == stored.id }) {
+                activeMessages.append(decrypted)
             }
 
-            // Update conversation list preview
+            // Update conversation preview
             if let idx = conversations.firstIndex(where: { $0.id == conversation.id }) {
-                conversations[idx].lastMessageAt = message.createdAt
+                conversations[idx].lastMessageAt = stored.timestamp
                 conversations[idx].lastMessagePreview = String(content.prefix(100))
+                saveConversations()
             }
         } catch {
-            // TODO: surface error to UI
+            // Encryption or broadcast failed
         }
     }
 
-    /// Insert an AI response message (called by AIParticipant after generation)
+    /// Encrypt and broadcast an AI response.
     public func insertAIMessage(_ content: String, conversationID: UUID) async {
-        let message = Message(
-            conversationID: conversationID,
-            senderID: nil,
-            content: content,
-            messageType: .aiResponse
-        )
-
         do {
-            try await client
-                .from("messages")
-                .insert(message)
-                .execute()
+            var senderKey = await keyManager.mySenderKey(for: conversationID)
+            let payload = try GroupCrypto.encrypt(content, using: &senderKey)
+            await keyManager.storeSenderKey(senderKey, for: conversationID)
+
+            let stored = StoredMessage(
+                conversationID: conversationID,
+                senderNodeID: localNodeID,
+                senderID: nil,
+                payload: payload,
+                messageType: .aiResponse
+            )
+
+            await messageStore.append(stored, groupID: conversationID)
+            let data = try JSONEncoder().encode(GroupMessagePayload(message: stored))
+            await onBroadcast?(data, conversationID)
 
             if activeConversation?.id == conversationID {
-                if !activeMessages.contains(where: { $0.id == message.id }) {
-                    activeMessages.append(message)
+                let decrypted = DecryptedMessage(message: stored.toMessage(), content: content)
+                if !activeMessages.contains(where: { $0.id == stored.id }) {
+                    activeMessages.append(decrypted)
                 }
             }
         } catch {
-            // AI message failed to persist
+            // AI message encryption failed
+        }
+    }
+
+    // MARK: - Receive Message (from P2P transport)
+
+    /// Handle an incoming encrypted message from a peer.
+    public func receiveMessage(_ data: Data) async {
+        guard let payload = try? JSONDecoder().decode(GroupMessagePayload.self, from: data) else { return }
+        let message = payload.message
+
+        // Dedup
+        guard await !messageStore.hasMessage(id: message.id, groupID: message.conversationID) else { return }
+
+        // Store locally
+        await messageStore.append(message, groupID: message.conversationID)
+        await syncService.recordMessage(
+            groupID: message.conversationID,
+            senderNodeID: message.senderNodeID,
+            timestamp: message.timestamp
+        )
+
+        // Decrypt and display if this conversation is open
+        if activeConversation?.id == message.conversationID {
+            if let decrypted = await decryptMessage(message, groupID: message.conversationID) {
+                activeMessages.append(decrypted)
+            }
         }
     }
 
     // MARK: - Create Conversation
 
-    /// Create a new DM with another user
-    public func createDM(with otherUserID: UUID) async -> Conversation? {
-        let conversation = Conversation(
-            type: .dm,
-            createdBy: currentUserID
-        )
-
-        do {
-            try await client.from("conversations").insert(conversation).execute()
-
-            // Add both participants
-            let ownerParticipant = Participant(
-                conversationID: conversation.id,
-                userID: currentUserID,
-                role: .owner
-            )
-            let otherParticipant = Participant(
-                conversationID: conversation.id,
-                userID: otherUserID,
-                role: .member
-            )
-            try await client.from("conversation_participants")
-                .insert([ownerParticipant, otherParticipant])
-                .execute()
-
-            conversations.insert(conversation, at: 0)
-            return conversation
-        } catch {
-            return nil
-        }
-    }
-
-    /// Create a new group conversation
+    /// Create a new group conversation (stored locally).
     public func createGroup(title: String, memberIDs: [UUID]) async -> Conversation? {
         let conversation = Conversation(
             type: .group,
             title: title,
             createdBy: currentUserID
         )
-
-        do {
-            try await client.from("conversations").insert(conversation).execute()
-
-            // Add owner + all members
-            var participants = [Participant(
-                conversationID: conversation.id,
-                userID: currentUserID,
-                role: .owner
-            )]
-            for memberID in memberIDs {
-                participants.append(Participant(
-                    conversationID: conversation.id,
-                    userID: memberID,
-                    role: .member
-                ))
-            }
-            try await client.from("conversation_participants")
-                .insert(participants)
-                .execute()
-
-            conversations.insert(conversation, at: 0)
-            return conversation
-        } catch {
-            return nil
-        }
+        conversations.insert(conversation, at: 0)
+        saveConversations()
+        return conversation
     }
 
-    // MARK: - Participant Management
+    /// Create a DM conversation (stored locally).
+    public func createDM(with otherUserID: UUID) async -> Conversation? {
+        let conversation = Conversation(
+            type: .dm,
+            createdBy: currentUserID
+        )
+        conversations.insert(conversation, at: 0)
+        saveConversations()
+        return conversation
+    }
+
+    // MARK: - Leave
 
     public func leaveConversation(_ conversationID: UUID) async {
-        do {
-            try await client.from("conversation_participants")
-                .update(["is_active": false])
-                .eq("conversation_id", value: conversationID.uuidString)
-                .eq("user_id", value: currentUserID.uuidString)
-                .execute()
-
-            conversations.removeAll { $0.id == conversationID }
-            if activeConversation?.id == conversationID {
-                await closeConversation()
-            }
-        } catch {
-            // Failed to leave
+        await keyManager.removeKeys(for: conversationID)
+        conversations.removeAll { $0.id == conversationID }
+        saveConversations()
+        if activeConversation?.id == conversationID {
+            closeConversation()
         }
     }
 
-    // MARK: - Read Receipts
+    // MARK: - Decryption
 
-    public func markAsRead(_ conversationID: UUID) async {
-        do {
-            try await client.from("conversation_participants")
-                .update(["last_read_at": ISO8601DateFormatter().string(from: Date())])
-                .eq("conversation_id", value: conversationID.uuidString)
-                .eq("user_id", value: currentUserID.uuidString)
-                .execute()
-        } catch {
-            // Non-critical
+    private func decryptMessages(_ messages: [StoredMessage], groupID: UUID) async -> [DecryptedMessage] {
+        var result: [DecryptedMessage] = []
+        for stored in messages {
+            if let decrypted = await decryptMessage(stored, groupID: groupID) {
+                result.append(decrypted)
+            }
         }
+        return result
     }
 
-    // MARK: - Private
+    private func decryptMessage(_ stored: StoredMessage, groupID: UUID) async -> DecryptedMessage? {
+        guard var key = await keyManager.senderKey(for: groupID, keyID: stored.payload.keyID) else {
+            let msg = stored.toMessage()
+            return DecryptedMessage(message: msg, content: "[unable to decrypt — missing key]")
+        }
 
-    private func loadParticipants(for conversationID: UUID) async {
         do {
-            let participants: [Participant] = try await client
-                .from("conversation_participants")
-                .select()
-                .eq("conversation_id", value: conversationID.uuidString)
-                .eq("is_active", value: true)
-                .execute()
-                .value
-
-            // For now, use user ID as display name — profiles join comes later
-            activeParticipants = participants.map { p in
-                ParticipantInfo(
-                    participant: p,
-                    displayName: p.userID == currentUserID ? "You" : "User"
-                )
-            }
+            let content = try GroupCrypto.decrypt(stored.payload, using: &key)
+            // Persist advanced ratchet state
+            await keyManager.storeSenderKey(key, for: groupID)
+            return DecryptedMessage(message: stored.toMessage(), content: content)
         } catch {
-            activeParticipants = []
+            let msg = stored.toMessage()
+            return DecryptedMessage(message: msg, content: "[decryption failed]")
         }
     }
 
     // MARK: - Cleanup
 
-    public func cleanup() async {
-        await closeConversation()
-        await realtimeService.removeAllSubscriptions()
+    public func cleanup() {
+        closeConversation()
+    }
+
+    // MARK: - Paths
+
+    private static var conversationsFile: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport.appendingPathComponent("Teale/groups/conversations.json")
     }
 }
 
-// MARK: - File-based auth storage for ChatKit's Supabase client
+// MARK: - StoredMessage → Message conversion
 
-private struct ChatFileStorage: AuthLocalStorage, @unchecked Sendable {
-    private let directory: URL
-
-    init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        self.directory = appSupport.appendingPathComponent("Teale/chat-auth", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    }
-
-    func store(key: String, value: Data) throws {
-        let url = directory.appendingPathComponent(safeFileName(key))
-        try value.write(to: url, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-    }
-
-    func retrieve(key: String) throws -> Data? {
-        let url = directory.appendingPathComponent(safeFileName(key))
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return try Data(contentsOf: url)
-    }
-
-    func remove(key: String) throws {
-        let url = directory.appendingPathComponent(safeFileName(key))
-        try? FileManager.default.removeItem(at: url)
-    }
-
-    private func safeFileName(_ key: String) -> String {
-        key.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? key
+extension StoredMessage {
+    /// Convert to a Message for display layer compatibility.
+    public func toMessage() -> Message {
+        Message(
+            id: id,
+            conversationID: conversationID,
+            senderID: senderID,
+            encryptedContent: "", // Not needed for display — DecryptedMessage has content
+            encryptionKeyID: payload.keyID,
+            messageType: messageType,
+            createdAt: timestamp
+        )
     }
 }
