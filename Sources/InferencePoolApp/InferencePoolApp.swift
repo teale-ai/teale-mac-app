@@ -74,7 +74,7 @@ struct ContentView: View {
                         if let authManager = appState.authManager {
                             DevicesView(authManager: authManager)
                         } else {
-                            Text("Sign in to manage devices")
+                            Text(appState.loc("settings.signInSubtitle"))
                         }
                     case .settings:
                         SettingsView()
@@ -89,8 +89,11 @@ struct ContentView: View {
                             .frame(width: 400, height: 500)
                     }
                 }
+            } else if let authManager = appState.authManager {
+                LoginView(authManager: authManager)
             } else {
-                LoginView(authManager: appState.authManager!)
+                Text("Authentication unavailable")
+                    .foregroundStyle(.secondary)
             }
         }
         .onChange(of: appState.authManager?.authState.isAuthenticated ?? false) { _, isAuthenticated in
@@ -114,28 +117,28 @@ struct SidebarView: View {
         @Bindable var state = appState
 
         List(selection: Binding(get: { appState.currentView }, set: { appState.currentView = $0 })) {
-            Label("Dashboard", systemImage: "gauge")
+            Label(appState.loc("sidebar.dashboard"), systemImage: "gauge")
                 .tag(AppView.dashboard)
-            Label("Chat", systemImage: "bubble.left.and.bubble.right")
+            Label(appState.loc("sidebar.chat"), systemImage: "bubble.left.and.bubble.right")
                 .tag(AppView.chat)
-            Label("Models", systemImage: "square.stack.3d.up")
+            Label(appState.loc("sidebar.models"), systemImage: "square.stack.3d.up")
                 .tag(AppView.models)
 
-            Section("Network") {
-                Label("Cluster", systemImage: "desktopcomputer.and.arrow.down")
+            Section(appState.loc("sidebar.network")) {
+                Label(appState.loc("sidebar.cluster"), systemImage: "desktopcomputer.and.arrow.down")
                     .tag(AppView.cluster)
-                Label("WAN", systemImage: "globe")
+                Label(appState.loc("sidebar.wan"), systemImage: "globe")
                     .tag(AppView.wan)
             }
 
             Section {
-                Label("Wallet", systemImage: "creditcard")
+                Label(appState.loc("sidebar.wallet"), systemImage: "creditcard")
                     .tag(AppView.wallet)
                 if appState.authManager?.authState.isAuthenticated ?? false {
-                    Label("Devices", systemImage: "laptopcomputer.and.iphone")
+                    Label(appState.loc("sidebar.devices"), systemImage: "laptopcomputer.and.iphone")
                         .tag(AppView.devices)
                 }
-                Label("Settings", systemImage: "gear")
+                Label(appState.loc("sidebar.settings"), systemImage: "gear")
                     .tag(AppView.settings)
             }
         }

@@ -1,28 +1,41 @@
 import Foundation
 import Network
+import OSLog
 import SharedTypes
 
 // MARK: - Peer Resolver
 
 /// Resolves a discovered Bonjour endpoint into a fully connected PeerInfo
 public actor PeerResolver {
+    private static let logger = Logger(subsystem: "com.teale.app", category: "ClusterResolver")
     private let localDeviceInfo: DeviceInfo
     private let passcodeHash: String?
     private let parameters: NWParameters
+    private let localOwnerUserID: UUID?
 
-    public init(localDeviceInfo: DeviceInfo, passcodeHash: String? = nil, parameters: NWParameters = .clusterParameters()) {
+    public init(
+        localDeviceInfo: DeviceInfo,
+        passcodeHash: String? = nil,
+        parameters: NWParameters = .clusterParameters(),
+        localOwnerUserID: UUID? = nil
+    ) {
         self.localDeviceInfo = localDeviceInfo
         self.passcodeHash = passcodeHash
         self.parameters = parameters
+        self.localOwnerUserID = localOwnerUserID
     }
 
     /// Connect to a discovered endpoint and perform handshake
     public func resolve(endpoint: NWEndpoint) async throws -> PeerInfo {
+        Self.logger.info("Resolving endpoint=\(String(describing: endpoint), privacy: .public)")
         let connection = NWConnection(to: endpoint, using: parameters)
         let peerConnection = PeerConnection(connection: connection)
         await peerConnection.start()
 
         guard await peerConnection.isReady else {
+            if await peerConnection.localNetworkDenied {
+                throw PeerResolverError.localNetworkPermissionDenied
+            }
             throw PeerResolverError.connectionFailed
         }
 
@@ -30,7 +43,8 @@ public actor PeerResolver {
         let hello = HelloPayload(
             deviceInfo: localDeviceInfo,
             clusterPasscodeHash: passcodeHash,
-            loadedModels: localDeviceInfo.loadedModels
+            loadedModels: localDeviceInfo.loadedModels,
+            ownerUserID: localOwnerUserID
         )
         try await peerConnection.send(.hello(hello))
 
@@ -53,7 +67,8 @@ public actor PeerResolver {
                     connection: peerConnection,
                     status: .connected,
                     connectionQuality: quality,
-                    lastHeartbeat: Date()
+                    lastHeartbeat: Date(),
+                    ownerUserID: ackPayload.ownerUserID
                 )
 
             default:
@@ -70,6 +85,9 @@ public actor PeerResolver {
         await peerConnection.start()
 
         guard await peerConnection.isReady else {
+            if await peerConnection.localNetworkDenied {
+                throw PeerResolverError.localNetworkPermissionDenied
+            }
             throw PeerResolverError.connectionFailed
         }
 
@@ -88,7 +106,8 @@ public actor PeerResolver {
                 let ack = HelloPayload(
                     deviceInfo: localDeviceInfo,
                     clusterPasscodeHash: passcodeHash,
-                    loadedModels: localDeviceInfo.loadedModels
+                    loadedModels: localDeviceInfo.loadedModels,
+                    ownerUserID: localOwnerUserID
                 )
                 try await peerConnection.send(.helloAck(ack))
 
@@ -99,7 +118,8 @@ public actor PeerResolver {
                     connection: peerConnection,
                     status: .connected,
                     connectionQuality: quality,
-                    lastHeartbeat: Date()
+                    lastHeartbeat: Date(),
+                    ownerUserID: helloPayload.ownerUserID
                 )
 
             default:
@@ -140,6 +160,7 @@ public enum PeerResolverError: LocalizedError, Sendable {
     case handshakeTimeout
     case passcodeRejected
     case incompatibleVersion
+    case localNetworkPermissionDenied
 
     public var errorDescription: String? {
         switch self {
@@ -147,6 +168,7 @@ public enum PeerResolverError: LocalizedError, Sendable {
         case .handshakeTimeout: return "Handshake timed out"
         case .passcodeRejected: return "Cluster passcode does not match"
         case .incompatibleVersion: return "Incompatible protocol version"
+        case .localNetworkPermissionDenied: return "Local Network access is blocked for Teale"
         }
     }
 }

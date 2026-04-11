@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import OSLog
 import SharedTypes
 import HardwareProfile
 
@@ -8,20 +9,24 @@ import HardwareProfile
 /// Central orchestrator for LAN cluster mode
 @Observable
 public final class ClusterManager: @unchecked Sendable {
+    private static let logger = Logger(subsystem: "com.teale.app", category: "ClusterManager")
     // State
     public private(set) var isEnabled: Bool = false
+    public private(set) var isScanning: Bool = false
     public private(set) var peers: [UUID: PeerInfo] = [:]
     public private(set) var topology: ClusterTopology = ClusterTopology()
     public private(set) var clusterState: ClusterState = ClusterState()
+    public private(set) var connectionNotice: String?
 
     // Configuration
     public var passcode: String?
     public var deviceName: String
     public var organizationID: String?
     public var orgCapacityReservation: Double = 0.6  // 0-1, default 60% reserved for org
+    public var authenticatedUserID: UUID?
 
     // Components
-    public let localDeviceInfo: DeviceInfo
+    public private(set) var localDeviceInfo: DeviceInfo
     private var bonjourService: BonjourService?
     private var peerResolver: PeerResolver?
     private let healthMonitor = PeerHealthMonitor()
@@ -29,6 +34,8 @@ public final class ClusterManager: @unchecked Sendable {
     private let tlsManager = ClusterTLSManager()
     private var heartbeatTask: Task<Void, Never>?
     private var healthCheckTask: Task<Void, Never>?
+    private var scanStopTask: Task<Void, Never>?
+    private var connectingDiscoveryKeys: Set<String> = []
 
     // Model sharing
     private var modelQueryContinuation: AsyncStream<ModelQueryResult>.Continuation?
@@ -38,12 +45,40 @@ public final class ClusterManager: @unchecked Sendable {
     public var localQueueDepth: Int = 0
 
     // Callbacks
-    public var onInferenceRequest: ((InferenceRequestPayload, PeerConnection) async -> Void)?
-    public var onCreditTransferReceived: ((CreditTransferPayload, PeerConnection) async -> Void)?
+    public var onInferenceRequest: ((InferenceRequestPayload, PeerInfo) async -> Void)?
+    public var onCreditTransferReceived: ((CreditTransferPayload, PeerInfo) async -> Void)?
 
     public init(localDeviceInfo: DeviceInfo) {
         self.localDeviceInfo = localDeviceInfo
         self.deviceName = localDeviceInfo.name
+    }
+
+    public func updateLocalLoadedModels(_ loadedModels: [String]) {
+        localDeviceInfo.loadedModels = loadedModels
+        Task { [weak self] in
+            await self?.sendHeartbeatNow()
+        }
+    }
+
+    public func updateAuthenticatedUserID(_ userID: UUID?) {
+        authenticatedUserID = userID
+        Task { [weak self] in
+            await self?.sendHeartbeatNow()
+        }
+    }
+
+    public func beginServingInference() {
+        localQueueDepth += 1
+        Task { [weak self] in
+            await self?.sendHeartbeatNow()
+        }
+    }
+
+    public func endServingInference() {
+        localQueueDepth = max(0, localQueueDepth - 1)
+        Task { [weak self] in
+            await self?.sendHeartbeatNow()
+        }
     }
 
     // MARK: - Enable/Disable
@@ -54,10 +89,16 @@ public final class ClusterManager: @unchecked Sendable {
 
         let passcodeHash = passcode.map { ClusterSecurity.hashPasscode($0) }
         self.organizationID = passcodeHash  // Nodes with same passcode form an org
+        connectionNotice = nil
         let parameters = NWParameters.clusterParameters(passcode: passcode, tlsManager: tlsManager)
 
         bonjourService = BonjourService(localDeviceID: localDeviceInfo.id, parameters: parameters)
-        peerResolver = PeerResolver(localDeviceInfo: localDeviceInfo, passcodeHash: passcodeHash, parameters: parameters)
+        peerResolver = PeerResolver(
+            localDeviceInfo: localDeviceInfo,
+            passcodeHash: passcodeHash,
+            parameters: parameters,
+            localOwnerUserID: authenticatedUserID
+        )
 
         // Handle discovered peers
         bonjourService?.onPeerDiscovered = { [weak self] endpoint, txtDict in
@@ -65,7 +106,7 @@ public final class ClusterManager: @unchecked Sendable {
         }
 
         bonjourService?.onPeerRemoved = { [weak self] endpoint in
-            Task { await self?.handlePeerRemoved(endpoint: endpoint) }
+            self?.handlePeerRemoved(endpoint: endpoint)
         }
 
         // Handle incoming connections
@@ -73,9 +114,8 @@ public final class ClusterManager: @unchecked Sendable {
             Task { await self?.handleIncomingConnection(connection) }
         }
 
-        // Start advertising and browsing
+        // Start advertising only. Browsing is triggered manually from the UI.
         try? bonjourService?.startAdvertising(deviceInfo: localDeviceInfo)
-        bonjourService?.startBrowsing()
 
         // Start heartbeat and health check loops
         startHeartbeatLoop()
@@ -91,6 +131,8 @@ public final class ClusterManager: @unchecked Sendable {
         bonjourService?.stop()
         bonjourService = nil
         peerResolver = nil
+        stopScanning()
+        connectionNotice = nil
 
         heartbeatTask?.cancel()
         healthCheckTask?.cancel()
@@ -104,18 +146,54 @@ public final class ClusterManager: @unchecked Sendable {
         updateState()
     }
 
+    public func scanForPeers(duration: Duration = .seconds(10)) {
+        guard isEnabled, bonjourService != nil else { return }
+
+        scanStopTask?.cancel()
+        bonjourService?.stopBrowsing()
+        bonjourService?.startBrowsing()
+        isScanning = true
+        connectionNotice = nil
+
+        scanStopTask = Task { [weak self] in
+            try? await Task.sleep(for: duration)
+            guard !Task.isCancelled else { return }
+            self?.stopScanning()
+        }
+    }
+
+    public func stopScanning() {
+        scanStopTask?.cancel()
+        scanStopTask = nil
+        bonjourService?.stopBrowsing()
+        isScanning = false
+    }
+
     // MARK: - Peer Management
 
     private func handlePeerDiscovered(endpoint: NWEndpoint, txtDict: [String: String]) async {
         guard let resolver = peerResolver else { return }
+        Self.logger.info("handlePeerDiscovered endpoint=\(String(describing: endpoint), privacy: .public) txt=\(String(describing: txtDict), privacy: .public)")
+        let discoveryKey = discoveryKey(for: endpoint, txtDict: txtDict)
+        guard !connectingDiscoveryKeys.contains(discoveryKey) else {
+            Self.logger.info("Skipping discovered endpoint \(discoveryKey, privacy: .public) because it is already connecting")
+            return
+        }
+        connectingDiscoveryKeys.insert(discoveryKey)
+        defer { connectingDiscoveryKeys.remove(discoveryKey) }
 
         do {
             let peerInfo = try await resolver.resolve(endpoint: endpoint)
-            peers[peerInfo.id] = peerInfo
-            startListening(to: peerInfo)
-            updateState()
+            if peerInfo.id == localDeviceInfo.id {
+                await peerInfo.connection.cancel()
+                return
+            }
+            Self.logger.info("Resolved peer successfully: \(peerInfo.id.uuidString, privacy: .public)")
+            connectionNotice = nil
+            await registerResolvedPeer(peerInfo, origin: .outbound)
         } catch {
-            // Discovery failed, will retry on next Bonjour update
+            connectionNotice = connectionNotice(for: error)
+            Self.logger.error("Cluster resolve failed for endpoint=\(String(describing: endpoint), privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -130,17 +208,63 @@ public final class ClusterManager: @unchecked Sendable {
 
         do {
             let peerInfo = try await resolver.acceptIncoming(connection: connection)
-            // Avoid duplicate connections
-            if peers[peerInfo.id] == nil {
+            if peerInfo.id == localDeviceInfo.id {
+                await peerInfo.connection.cancel()
+                return
+            }
+            connectionNotice = nil
+            await registerResolvedPeer(peerInfo, origin: .inbound)
+        } catch {
+            connectionNotice = connectionNotice(for: error)
+            Self.logger.error("Cluster incoming connection failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private enum ConnectionOrigin {
+        case outbound
+        case inbound
+    }
+
+    private func preferredOrigin(for peerID: UUID) -> ConnectionOrigin {
+        localDeviceInfo.id.uuidString < peerID.uuidString ? .outbound : .inbound
+    }
+
+    private func registerResolvedPeer(_ peerInfo: PeerInfo, origin: ConnectionOrigin) async {
+        if let existingPeer = peers[peerInfo.id] {
+            let preferredOrigin = preferredOrigin(for: peerInfo.id)
+            if origin == preferredOrigin {
+                Self.logger.info("Replacing existing peer \(peerInfo.id.uuidString, privacy: .public) with preferred \(String(describing: origin), privacy: .public) connection")
+                await existingPeer.connection.cancel()
                 peers[peerInfo.id] = peerInfo
                 startListening(to: peerInfo)
                 updateState()
             } else {
+                Self.logger.info("Closing duplicate \(String(describing: origin), privacy: .public) connection for peer \(peerInfo.id.uuidString, privacy: .public)")
                 await peerInfo.connection.cancel()
             }
-        } catch {
-            // Incoming connection failed
+            return
         }
+
+        Self.logger.info("Registered peer \(peerInfo.id.uuidString, privacy: .public) via \(String(describing: origin), privacy: .public)")
+        peers[peerInfo.id] = peerInfo
+        startListening(to: peerInfo)
+        updateState()
+    }
+
+    private func connectionNotice(for error: Error) -> String {
+        if let resolverError = error as? PeerResolverError,
+           resolverError == .localNetworkPermissionDenied {
+            return "Local Network access is blocked for Teale on this Mac. Enable it in System Settings > Privacy & Security > Local Network on both Macs, then relaunch Teale."
+        }
+
+        return "Teale found a nearby service but could not connect. On macOS, verify Local Network access is enabled for Teale in System Settings > Privacy & Security > Local Network on both Macs."
+    }
+
+    private func discoveryKey(for endpoint: NWEndpoint, txtDict: [String: String]) -> String {
+        if let deviceID = txtDict["deviceID"], !deviceID.isEmpty {
+            return "id:\(deviceID)"
+        }
+        return "endpoint:\(String(describing: endpoint))"
     }
 
     // MARK: - Message Handling
@@ -167,6 +291,7 @@ public final class ClusterManager: @unchecked Sendable {
             peer.throttleLevel = payload.throttleLevel
             peer.activeRequestCount = payload.queueDepth
             peer.organizationID = payload.organizationID
+            peer.ownerUserID = payload.ownerUserID
             if peer.status == .degraded {
                 peer.status = .connected
             }
@@ -184,7 +309,7 @@ public final class ClusterManager: @unchecked Sendable {
 
         case .inferenceRequest(let payload):
             // Delegate to the inference handler
-            await onInferenceRequest?(payload, peer.connection)
+            await onInferenceRequest?(payload, peer)
 
         case .inferenceChunk, .inferenceComplete, .inferenceError:
             // These are handled by the ClusterProvider waiting on specific requestIDs
@@ -225,7 +350,7 @@ public final class ClusterManager: @unchecked Sendable {
             break
 
         case .creditTransferRequest(let payload):
-            await onCreditTransferReceived?(payload, peer.connection)
+            await onCreditTransferReceived?(payload, peer)
 
         case .creditTransferConfirm:
             // Confirmation received — informational only (sender already debited)
@@ -240,20 +365,7 @@ public final class ClusterManager: @unchecked Sendable {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 guard let self = self else { return }
-
-                var heartbeat = await self.healthMonitor.makeHeartbeat(
-                    deviceID: self.localDeviceInfo.id,
-                    thermalLevel: .nominal,  // TODO: wire to actual throttler
-                    throttleLevel: 100,
-                    loadedModels: self.localDeviceInfo.loadedModels,
-                    isGenerating: false,
-                    queueDepth: self.localQueueDepth
-                )
-                heartbeat.organizationID = self.organizationID
-
-                for (_, peer) in self.peers where peer.status == .connected || peer.status == .degraded {
-                    try? await peer.connection.send(.heartbeat(heartbeat))
-                }
+                await self.sendHeartbeatNow()
             }
         }
     }
@@ -292,6 +404,25 @@ public final class ClusterManager: @unchecked Sendable {
     private func updateState() {
         topology.update(peers: Array(peers.values))
         clusterState = topology.toClusterState(isEnabled: isEnabled)
+    }
+
+    private func sendHeartbeatNow() async {
+        guard isEnabled else { return }
+
+        var heartbeat = await healthMonitor.makeHeartbeat(
+            deviceID: localDeviceInfo.id,
+            thermalLevel: .nominal,  // TODO: wire to actual throttler
+            throttleLevel: 100,
+            loadedModels: localDeviceInfo.loadedModels,
+            isGenerating: localQueueDepth > 0,
+            queueDepth: localQueueDepth
+        )
+        heartbeat.organizationID = organizationID
+        heartbeat.ownerUserID = authenticatedUserID
+
+        for (_, peer) in peers where peer.status == .connected || peer.status == .degraded {
+            try? await peer.connection.send(.heartbeat(heartbeat))
+        }
     }
 
     /// Get summaries of all peers for UI

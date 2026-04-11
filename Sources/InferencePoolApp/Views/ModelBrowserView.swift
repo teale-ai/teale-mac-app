@@ -25,7 +25,7 @@ struct ModelBrowserView: View {
             HStack {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Search models...", text: $searchText)
+                TextField(appState.loc("models.search"), text: $searchText)
                     .textFieldStyle(.plain)
             }
             .padding(8)
@@ -90,7 +90,7 @@ struct ModelBrowserView: View {
 
             // Footer
             HStack {
-                Text("\(appState.modelManager.compatibleModels.count) models available for your hardware")
+                Text(String(format: appState.loc("models.available"), appState.modelManager.compatibleModels.count))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -116,21 +116,21 @@ struct ModelBrowserView: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
 
-                Text("\(Int(appState.hardware.availableRAMForModelsGB)) GB available")
+                Text(String(format: appState.loc("models.gbAvailable"), Int(appState.hardware.availableRAMForModelsGB)))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             .padding(8)
         }
-        .navigationTitle("Models")
-        .alert("Switch Model?", isPresented: Binding(
+        .navigationTitle(appState.loc("models.title"))
+        .alert(appState.loc("models.switchModel"), isPresented: Binding(
             get: { switchConfirmModel != nil },
             set: { if !$0 { switchConfirmModel = nil } }
         )) {
-            Button("Cancel", role: .cancel) {
+            Button(appState.loc("models.cancel"), role: .cancel) {
                 switchConfirmModel = nil
             }
-            Button("Switch") {
+            Button(appState.loc("models.switchButton")) {
                 if let model = switchConfirmModel {
                     switchConfirmModel = nil
                     Task { await appState.loadModel(model) }
@@ -138,17 +138,17 @@ struct ModelBrowserView: View {
             }
         } message: {
             if let model = switchConfirmModel {
-                Text("This will unload the current model and load \(model.name).")
+                Text(String(format: appState.loc("models.switchConfirm"), model.name))
             }
         }
-        .alert("Download Complete", isPresented: Binding(
+        .alert(appState.loc("models.downloadComplete"), isPresented: Binding(
             get: { appState.justDownloadedModel != nil },
             set: { if !$0 { appState.justDownloadedModel = nil } }
         )) {
-            Button("Not Now", role: .cancel) {
+            Button(appState.loc("models.notNow"), role: .cancel) {
                 appState.justDownloadedModel = nil
             }
-            Button("Load") {
+            Button(appState.loc("models.load")) {
                 if let model = appState.justDownloadedModel {
                     appState.justDownloadedModel = nil
                     Task { await appState.loadModel(model) }
@@ -156,7 +156,7 @@ struct ModelBrowserView: View {
             }
         } message: {
             if let model = appState.justDownloadedModel {
-                Text("\(model.name) is ready. Load it now? This will unload the current model.")
+                Text(String(format: appState.loc("models.readyToLoad"), model.name))
             }
         }
         .alert("Import Error", isPresented: Binding(
@@ -445,18 +445,18 @@ struct ModelRowView: View {
     @ViewBuilder
     private var statusBadge: some View {
         if isCurrentlyLoaded {
-            badge("LOADED", color: .green)
+            badge(appState.loc("models.loaded"), color: .green)
         } else if isCurrentlyLoading {
             let phase = appState.loadingPhase.lowercased()
             if phase.contains("verif") {
-                badge("CHECKING", color: .yellow)
+                badge(appState.loc("models.checking"), color: .yellow)
             } else {
-                badge("LOADING", color: .blue)
+                badge(appState.loc("models.loading"), color: .blue)
             }
         } else if isDownloading {
-            badge("DL", color: .orange)
+            badge(appState.loc("models.downloading"), color: .orange)
         } else if isDownloaded {
-            badge("READY", color: .secondary)
+            badge(appState.loc("models.ready"), color: .secondary)
         }
     }
 
@@ -466,7 +466,7 @@ struct ModelRowView: View {
     private var actionView: some View {
         if isCurrentlyLoaded {
             // Loaded — offer unload
-            Button("Unload") {
+            Button(appState.loc("models.unload")) {
                 Task { await appState.unloadModel() }
             }
             .buttonStyle(.bordered)
@@ -487,7 +487,7 @@ struct ModelRowView: View {
                 } else {
                     ProgressView()
                         .controlSize(.small)
-                    Text(appState.loadingPhase.isEmpty ? "Preparing…" : appState.loadingPhase)
+                    Text(appState.loadingPhase.isEmpty ? appState.loc("models.preparing") : appState.loadingPhase)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -515,7 +515,7 @@ struct ModelRowView: View {
 
         } else if isDownloaded {
             // On disk — load into memory
-            Button("Load") {
+            Button(appState.loc("models.load")) {
                 if hasOtherModelLoaded || isEngineOccupied {
                     onSwitchRequest(model)
                 } else {
@@ -539,7 +539,7 @@ struct ModelRowView: View {
                     await appState.downloadModel(model)
                 }
             } label: {
-                Label("Download", systemImage: "arrow.down.circle")
+                Label(appState.loc("models.download"), systemImage: "arrow.down.circle")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)

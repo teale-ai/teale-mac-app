@@ -112,6 +112,16 @@ public struct CreditAnalytics: Sendable {
                     peerEarnings[peer, default: 0] += tx.amount.value
                 }
 
+            case .deposit:
+                dailyEarnings[dayComponents, default: .zero] += tx.amount
+                if tx.timestamp >= sevenDaysAgo { weeklyEarnings += tx.amount }
+                if tx.timestamp >= thirtyDaysAgo { monthlyEarnings += tx.amount }
+
+            case .withdrawal:
+                dailySpending[dayComponents, default: .zero] += tx.amount
+                if tx.timestamp >= sevenDaysAgo { weeklySpending += tx.amount }
+                if tx.timestamp >= thirtyDaysAgo { monthlySpending += tx.amount }
+
             case .bonus, .adjustment, .transfer:
                 break
             }

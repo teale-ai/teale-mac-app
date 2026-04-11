@@ -1,4 +1,6 @@
 import Foundation
+import IOKit
+import IOKit.pwr_mgt
 import SharedTypes
 import HardwareProfile
 import InferenceEngine
@@ -10,6 +12,7 @@ import WANKit
 import CreditKit
 import AgentKit
 import AuthKit
+import WalletKit
 
 // MARK: - App State
 
@@ -22,6 +25,12 @@ public final class AppState {
         static let installNodeID = "teale.installNodeID"
     }
 
+    private static let stableNodeIDKey = "teale.stable_node_id"
+    private static let inferenceBackendKey = "teale.inference_backend"
+    private static let exoBaseURLKey = "teale.exo_base_url"
+    private static let exoPreferredModelIDKey = "teale.exo_preferred_model_id"
+    private static let wanRelayURLKey = "teale.wan_relay_url"
+
     // Hardware
     public let hardware: HardwareCapability
     public let throttler: AdaptiveThrottler
@@ -31,6 +40,7 @@ public final class AppState {
 
     // Local inference provider
     private let localProvider: MLXProvider
+    private let exoProvider: ExoProvider
 
     // Models
     public let modelManager: ModelManagerService
@@ -55,6 +65,18 @@ public final class AppState {
 
     // Credits
     public var wallet: CreditWallet
+
+    // Solana Wallet (USDC on-chain bridge)
+    public var walletBridge: WalletBridge?
+    public var solanaWalletEnabled: Bool = UserDefaults.standard.bool(forKey: "teale.solanaWalletEnabled") {
+        didSet {
+            UserDefaults.standard.set(solanaWalletEnabled, forKey: "teale.solanaWalletEnabled")
+            Task { await toggleSolanaWallet() }
+        }
+    }
+    public var solanaNetwork: String = UserDefaults.standard.string(forKey: "teale.solanaNetwork") ?? "devnet" {
+        didSet { UserDefaults.standard.set(solanaNetwork, forKey: "teale.solanaNetwork") }
+    }
 
     // Auth
     public let authManager: AuthManager?
@@ -88,19 +110,41 @@ public final class AppState {
     public var showSignIn: Bool = false
     public var loadingPhase: String = ""
     public var loadingProgress: Double?
+    public var pendingWalletTransferPeerID: UUID?
 
     // Settings
     public var launchAtLogin: Bool = false
-    public var maxStorageGB: Double = 50.0 {
+    public var inferenceBackend: InferenceBackend = InferenceBackend(
+        rawValue: UserDefaults.standard.string(forKey: inferenceBackendKey) ?? InferenceBackend.localMLX.rawValue
+    ) ?? .localMLX {
+        didSet {
+            UserDefaults.standard.set(inferenceBackend.rawValue, forKey: Self.inferenceBackendKey)
+            Task { await applyInferenceBackendSelection() }
+        }
+    }
+    public var exoBaseURL: String = UserDefaults.standard.string(forKey: exoBaseURLKey) ?? "http://localhost:52415" {
+        didSet {
+            UserDefaults.standard.set(exoBaseURL, forKey: Self.exoBaseURLKey)
+            Task { await applyInferenceBackendSelection() }
+        }
+    }
+    public var exoPreferredModelID: String = UserDefaults.standard.string(forKey: exoPreferredModelIDKey) ?? "" {
+        didSet {
+            UserDefaults.standard.set(exoPreferredModelID, forKey: Self.exoPreferredModelIDKey)
+            Task { await applyInferenceBackendSelection() }
+        }
+    }
+    public var exoAvailableModels: [String] = []
+    public var exoRunningModels: [String] = []
+    public var exoStatusMessage: String = "Exo not configured"
+    public var maxStorageGB: Double = UserDefaults.standard.object(forKey: Preferences.maxStorageGB) as? Double ?? 50.0 {
         didSet {
             UserDefaults.standard.set(maxStorageGB, forKey: Preferences.maxStorageGB)
             Task { await modelManager.cache.setMaxStorage(maxStorageGB) }
         }
     }
-    public var wanRelayURL: String = "wss://relay.teale.com/ws" {
-        didSet {
-            UserDefaults.standard.set(wanRelayURL, forKey: Preferences.wanRelayURL)
-        }
+    public var wanRelayURL: String = UserDefaults.standard.string(forKey: Self.wanRelayURLKey) ?? "wss://teale-relay.fly.dev/ws" {
+        didSet { UserDefaults.standard.set(wanRelayURL, forKey: Self.wanRelayURLKey) }
     }
     public var autoManageModels: Bool = false {
         didSet { demandTracker.autoManageEnabled = autoManageModels }
@@ -108,16 +152,97 @@ public final class AppState {
 
     private var isUpdatingWANToggle: Bool = false
 
+    /// Prevent system sleep so the node stays online for the inference pool.
+    /// Display can still turn off — only system/idle sleep is inhibited.
+    public var keepAwake: Bool = UserDefaults.standard.bool(forKey: "teale.keepAwake") {
+        didSet {
+            UserDefaults.standard.set(keepAwake, forKey: "teale.keepAwake")
+            updatePowerAssertion()
+        }
+    }
+    private var powerAssertionID: IOPMAssertionID = 0
+
+    private func updatePowerAssertion() {
+        if keepAwake {
+            if powerAssertionID == 0 {
+                let reason = "Teale inference node staying online for the network" as CFString
+                IOPMAssertionCreateWithName(
+                    kIOPMAssertPreventUserIdleSystemSleep as CFString,
+                    IOPMAssertionLevel(kIOPMAssertionLevelOn),
+                    reason,
+                    &powerAssertionID
+                )
+            }
+        } else {
+            if powerAssertionID != 0 {
+                IOPMAssertionRelease(powerAssertionID)
+                powerAssertionID = 0
+            }
+        }
+    }
+
+    public var language: AppLanguage = AppLanguage(
+        rawValue: UserDefaults.standard.string(forKey: "teale.language") ?? "en"
+    ) ?? .english {
+        didSet { UserDefaults.standard.set(language.rawValue, forKey: "teale.language") }
+    }
+
+    public func loc(_ key: String) -> String {
+        L.string(key, language: language)
+    }
+
+    public var inferenceEngineName: String {
+        switch inferenceBackend {
+        case .localMLX:
+            return "MLX"
+        case .exo:
+            return "Exo"
+        }
+    }
+
+    public var hasAvailableInferenceTarget: Bool {
+        if case .ready = engineStatus {
+            return true
+        }
+
+        if clusterEnabled,
+           clusterManager.topology.connectedPeers.contains(where: {
+               !$0.isGenerating && $0.throttleLevel > 0 && !$0.loadedModels.isEmpty
+           }) {
+            return true
+        }
+
+        if wanEnabled {
+            return wanManager.state.connectedPeers.contains { !$0.loadedModels.isEmpty }
+        }
+
+        return false
+    }
+
     public init() {
         let detector = HardwareDetector()
         let hw = detector.detect()
+        let initialBackend = InferenceBackend(
+            rawValue: UserDefaults.standard.string(forKey: Self.inferenceBackendKey) ?? InferenceBackend.localMLX.rawValue
+        ) ?? .localMLX
         self.hardware = hw
         self.throttler = AdaptiveThrottler()
 
         let mlxProvider = MLXProvider()
         self.localProvider = mlxProvider
         let persistedMaxStorage = UserDefaults.standard.object(forKey: Preferences.maxStorageGB) as? Double ?? 50.0
-        self.engine = InferenceEngineManager(provider: mlxProvider, throttler: throttler)
+        let exoProvider = ExoProvider(
+            baseURLString: UserDefaults.standard.string(forKey: Self.exoBaseURLKey) ?? "http://localhost:52415",
+            preferredModelID: UserDefaults.standard.string(forKey: Self.exoPreferredModelIDKey)
+        )
+        self.exoProvider = exoProvider
+        let initialProvider: any InferenceProvider
+        if initialBackend == .exo {
+            initialProvider = exoProvider
+        } else {
+            initialProvider = mlxProvider
+        }
+        self.engine = InferenceEngineManager(provider: initialProvider, throttler: throttler)
         self.modelManager = ModelManagerService(hardware: hw, maxStorageGB: persistedMaxStorage)
         self.demandTracker = ModelDemandTracker(catalog: modelManager.catalog, hardware: hw)
 
@@ -135,7 +260,7 @@ public final class AppState {
         // Wallet placeholder — replaced async on launch
         self.wallet = CreditWallet.placeholder()
         self.maxStorageGB = persistedMaxStorage
-        self.wanRelayURL = UserDefaults.standard.string(forKey: Preferences.wanRelayURL) ?? "wss://relay.teale.com/ws"
+        self.wanRelayURL = UserDefaults.standard.string(forKey: Self.wanRelayURLKey) ?? "wss://teale-relay.fly.dev/ws"
         // Start server eagerly so it's available even if the MenuBarExtra is never clicked.
         // DispatchQueue.global dispatches to a background thread, then Task hops to @MainActor.
         let appState = self
@@ -146,34 +271,72 @@ public final class AppState {
             }
         }
 
-        self.clusterManager.onInferenceRequest = { [weak self] payload, connection in
-            await self?.handleIncomingInferenceRequest(
-                payload,
-                sendMessage: { message in
-                    try await connection.send(message)
+        self.clusterManager.onInferenceRequest = { [weak self, clusterManager] payload, peer in
+            guard let self else { return }
+
+            clusterManager.beginServingInference()
+            defer { clusterManager.endServingInference() }
+
+            do {
+                let provider = self.currentServingProvider()
+                let stream = provider.generate(request: payload.request)
+                for try await chunk in stream {
+                    let response = InferenceChunkPayload(requestID: payload.requestID, chunk: chunk)
+                    try await peer.connection.send(.inferenceChunk(response))
                 }
-            )
+
+                let complete = InferenceCompletePayload(requestID: payload.requestID)
+                try await peer.connection.send(.inferenceComplete(complete))
+            } catch {
+                let response = InferenceErrorPayload(
+                    requestID: payload.requestID,
+                    errorMessage: error.localizedDescription
+                )
+                try? await peer.connection.send(.inferenceError(response))
+            }
         }
+
         self.wanManager.onInferenceRequest = { [weak self] payload, connection in
-            await self?.handleIncomingInferenceRequest(
-                payload,
-                sendMessage: { message in
-                    try await connection.send(message)
+            guard let self else { return }
+
+            do {
+                let provider = self.currentServingProvider()
+                let stream = provider.generate(request: payload.request)
+                for try await chunk in stream {
+                    let response = InferenceChunkPayload(requestID: payload.requestID, chunk: chunk)
+                    try await connection.send(.inferenceChunk(response))
                 }
-            )
+
+                let complete = InferenceCompletePayload(requestID: payload.requestID)
+                try await connection.send(.inferenceComplete(complete))
+            } catch {
+                let response = InferenceErrorPayload(
+                    requestID: payload.requestID,
+                    errorMessage: error.localizedDescription
+                )
+                try? await connection.send(.inferenceError(response))
+            }
         }
     }
 
     /// Call once at app launch to initialize async components (auth, credit ledger, agent)
     public func initializeAsync() async {
+        // Restore power assertion if keep-awake was enabled
+        if keepAwake { updatePowerAssertion() }
+
         // Scan which models are already downloaded
         await refreshDownloadedModels()
+        let nodeID = Self.stableNodeID()
 
         // Check auth session (skip if Supabase not configured)
         if let authManager {
-            await authManager.checkSession()
             authManager.deviceHardware = (chipName: hardware.chipName, ramGB: Int(hardware.totalRAMGB))
+            authManager.wanNodeID = nodeID
+            await authManager.checkSession()
+            clusterManager.updateAuthenticatedUserID(authManager.currentUser?.id)
         }
+
+        await applyInferenceBackendSelection()
 
         // Initialize credit wallet
         let ledger = await CreditLedger()
@@ -182,14 +345,11 @@ public final class AppState {
         await realWallet.refreshBalance()
         self.wallet = realWallet
 
-        // Initialize agent profile — use a random node ID to avoid Keychain prompt on launch.
+        // Initialize agent profile with a stable local node ID.
         // WANNodeIdentity is created lazily when WAN is actually enabled.
         let hostname = ProcessInfo.processInfo.hostName
-        let nodeID = stableInstallNodeID()
-
         // Link WAN identity to auth device record
         if let authManager {
-            authManager.wanNodeID = nodeID
             if authManager.authState.isAuthenticated {
                 await authManager.fetchDevices()
             }
@@ -225,15 +385,87 @@ public final class AppState {
             }
         }
 
+        // Initialize Solana wallet bridge if enabled
+        if solanaWalletEnabled {
+            await initializeSolanaWallet(creditWallet: realWallet)
+        }
+
         // Wire credit transfer handling
-        clusterManager.onCreditTransferReceived = { [weak self] payload, connection in
+        clusterManager.onCreditTransferReceived = { [weak self] payload, peer in
             guard let self = self else { return }
-            await self.wallet.receiveTransfer(amount: payload.amount, fromPeer: payload.senderNodeID, memo: payload.memo)
+            let amount = CreditAmount(payload.amount)
+            let senderName = payload.senderDeviceName ?? peer.deviceInfo.name
+            let modelID = payload.modelID
+            let tokenCount = payload.tokenCount
+
+            let description: String
+            if let tokenCount, let modelName = self.resolveModelDescriptor(for: modelID)?.name {
+                description = "Received \(String(format: "%.2f", payload.amount)) credits from \(senderName) for \(tokenCount) tokens of \(modelName)"
+            } else if let memo = payload.memo {
+                description = "Received \(String(format: "%.2f", payload.amount)) credits from \(senderName): \(memo)"
+            } else {
+                description = "Received \(String(format: "%.2f", payload.amount)) credits from \(senderName)"
+            }
+
+            await self.wallet.recordTransferCredit(
+                amount: amount,
+                fromPeer: payload.senderNodeID,
+                description: description,
+                modelID: modelID,
+                tokenCount: tokenCount
+            )
+
+            if self.isInferenceSettlement(payload) && self.isSameOwner(peer: peer) {
+                let refundDescription = "Refunded internal LAN inference receipt for \(senderName) (same account)"
+                await self.wallet.recordAdjustmentDebit(
+                    amount: amount,
+                    description: refundDescription,
+                    peerNodeID: payload.senderNodeID,
+                    modelID: modelID,
+                    tokenCount: tokenCount
+                )
+            }
+
             let confirm = CreditTransferConfirmPayload(
                 transferID: payload.transferID,
                 receiverNodeID: self.clusterManager.localDeviceInfo.id.uuidString
             )
-            try? await connection.send(.creditTransferConfirm(confirm))
+            try? await peer.connection.send(.creditTransferConfirm(confirm))
+        }
+    }
+
+    private static func stableNodeID() -> String {
+        if let existing = UserDefaults.standard.string(forKey: stableNodeIDKey), !existing.isEmpty {
+            return existing
+        }
+
+        let nodeID = UUID().uuidString
+        UserDefaults.standard.set(nodeID, forKey: stableNodeIDKey)
+        return nodeID
+    }
+
+    // MARK: - Solana Wallet
+
+    private func initializeSolanaWallet(creditWallet: CreditWallet) async {
+        do {
+            let solanaIdentity = try SolanaIdentity.loadOrCreate()
+            let config: WalletKitConfig = solanaNetwork == "mainnet" ? .mainnet : .devnet
+            let bridge = WalletBridge(identity: solanaIdentity, creditWallet: creditWallet, config: config)
+            await bridge.startMonitoring()
+            self.walletBridge = bridge
+        } catch {
+            print("[WalletKit] Failed to initialize Solana wallet: \(error)")
+        }
+    }
+
+    private func toggleSolanaWallet() async {
+        if solanaWalletEnabled {
+            await initializeSolanaWallet(creditWallet: wallet)
+        } else {
+            if let bridge = walletBridge {
+                await bridge.stopMonitoring()
+            }
+            walletBridge = nil
         }
     }
 
@@ -274,6 +506,11 @@ public final class AppState {
 
     /// Load a model into GPU memory for inference.
     public func loadModel(_ descriptor: ModelDescriptor) async {
+        if inferenceBackend == .exo {
+            exoPreferredModelID = descriptor.huggingFaceRepo
+            return
+        }
+
         do {
             // Unload any currently loaded model first
             if case .ready = engineStatus {
@@ -286,7 +523,10 @@ public final class AppState {
             loadingProgress = 0
 
             try await engine.loadModel(descriptor) { [weak self] progress in
-                Task { @MainActor in
+                // Avoid creating unstructured Task per progress update — the rapid fire-and-forget
+                // Task { @MainActor } pattern can trigger swift_task_dealloc crashes when the
+                // parent async context completes while orphaned tasks are still queued.
+                DispatchQueue.main.async { [weak self] in
                     self?.loadingPhase = progress.phase.rawValue
                     self?.loadingProgress = progress.fractionCompleted
                 }
@@ -295,14 +535,13 @@ public final class AppState {
             loadingPhase = ""
             loadingProgress = nil
             engineStatus = .ready(descriptor)
-            if wanEnabled {
-                await wanManager.updateLocalLoadedModels([descriptor.huggingFaceRepo])
-            }
+            syncAdvertisedLoadedModels()
             await refreshDownloadedModels()
         } catch {
             loadingPhase = ""
             loadingProgress = nil
             engineStatus = .error(error.localizedDescription)
+            syncAdvertisedLoadedModels()
         }
     }
 
@@ -355,68 +594,15 @@ public final class AppState {
     }
 
     public func unloadModel() async {
+        if inferenceBackend == .exo {
+            exoPreferredModelID = ""
+            return
+        }
+
         await engine.unloadModel()
         selectedModel = nil
         engineStatus = .idle
-        if wanEnabled {
-            await wanManager.updateLocalLoadedModels([])
-        }
-    }
-
-    private func handleIncomingInferenceRequest(
-        _ payload: InferenceRequestPayload,
-        sendMessage: @escaping @Sendable (ClusterMessage) async throws -> Void
-    ) async {
-        let localModelID = selectedModel?.huggingFaceRepo
-        let requestedModelID = payload.request.model ?? localModelID
-
-        guard let requestedModelID else {
-            try? await sendMessage(.inferenceError(InferenceErrorPayload(
-                requestID: payload.requestID,
-                errorMessage: "No model specified for remote inference request"
-            )))
-            return
-        }
-
-        guard localModelID == requestedModelID else {
-            try? await sendMessage(.inferenceError(InferenceErrorPayload(
-                requestID: payload.requestID,
-                errorMessage: "Model \(requestedModelID) is not loaded on this device"
-            )))
-            return
-        }
-
-        var request = payload.request
-        request.model = requestedModelID
-
-        do {
-            var totalTokens = 0
-            let stream = localProvider.generate(request: request)
-            for try await chunk in stream {
-                // Count tokens from streamed content
-                if let content = chunk.choices.first?.delta.content {
-                    totalTokens += content.count / 4  // Rough estimate: ~4 chars per token
-                }
-                try await sendMessage(.inferenceChunk(InferenceChunkPayload(
-                    requestID: payload.requestID,
-                    chunk: chunk
-                )))
-            }
-
-            try await sendMessage(.inferenceComplete(InferenceCompletePayload(
-                requestID: payload.requestID
-            )))
-
-            // Record earning for serving this inference
-            if totalTokens > 0, let model = selectedModel {
-                await wallet.recordEarning(tokens: max(totalTokens, 1), model: model)
-            }
-        } catch {
-            try? await sendMessage(.inferenceError(InferenceErrorPayload(
-                requestID: payload.requestID,
-                errorMessage: error.localizedDescription
-            )))
-        }
+        syncAdvertisedLoadedModels()
     }
 
     public func startServer() async {
@@ -435,7 +621,24 @@ public final class AppState {
     }
 
     public func refreshStatus() async {
+        if inferenceBackend == .exo {
+            try? await exoProvider.refreshSelection()
+        }
+
         engineStatus = await engine.status
+        selectedModel = await engine.loadedModel
+
+        if inferenceBackend == .exo {
+            exoAvailableModels = await exoProvider.availableModelIDs
+            exoRunningModels = await exoProvider.runningModelIDs
+            exoStatusMessage = await exoProvider.connectionSummary
+        } else {
+            exoAvailableModels = []
+            exoRunningModels = []
+            exoStatusMessage = "Exo not in use"
+        }
+
+        syncAdvertisedLoadedModels()
     }
 
     /// Send credits to a connected peer
@@ -445,7 +648,8 @@ public final class AppState {
         guard success else { return false }
 
         let payload = CreditTransferPayload(
-            senderNodeID: clusterManager.localDeviceInfo.id.uuidString,
+            senderNodeID: Self.stableNodeID(),
+            senderDeviceName: ProcessInfo.processInfo.hostName,
             amount: amount,
             memo: memo
         )
@@ -468,21 +672,119 @@ public final class AppState {
     }
 
     private func enableCluster() {
-        let clusterProvider = ClusterProvider(localProvider: localProvider, clusterManager: clusterManager)
-        Task {
-            await engine.setProvider(clusterProvider)
-        }
         modelManager.peerModelSource = clusterManager
+        clusterManager.updateAuthenticatedUserID(authManager?.currentUser?.id)
         clusterManager.enable()
         syncLANPeersToWAN()
+        Task { await applyInferenceBackendSelection() }
+        clusterManager.scanForPeers()
     }
 
     private func disableCluster() {
         clusterManager.disable()
         modelManager.peerModelSource = nil
         wanManager.lanPeerNodeIDs = []
-        Task {
-            await engine.setProvider(localProvider)
+        Task { await applyInferenceBackendSelection() }
+    }
+
+    private func syncAdvertisedLoadedModels() {
+        let loadedModels: [String]
+        switch engineStatus {
+        case .ready(let descriptor):
+            loadedModels = [descriptor.huggingFaceRepo]
+        default:
+            loadedModels = []
+        }
+
+        clusterManager.updateLocalLoadedModels(loadedModels)
+        if wanEnabled {
+            Task { await wanManager.updateLocalLoadedModels(loadedModels) }
+        }
+    }
+
+    private func recordRemoteInferenceSettlement(_ record: ClusterProvider.RemoteGenerationRecord) async {
+        guard let model = resolveModelDescriptor(for: record.modelID) else {
+            return
+        }
+
+        let amount = CreditPricing.cost(tokenCount: record.tokenCount, model: model)
+        let peerNodeID = record.peer.id.uuidString
+        let sameOwner = isSameOwner(peer: record.peer)
+        let requesterNodeID = Self.stableNodeID()
+        let requesterName = ProcessInfo.processInfo.hostName
+        let memo = "LAN inference settlement for \(record.tokenCount) tokens of \(model.name)"
+        let payload = CreditTransferPayload(
+            senderNodeID: requesterNodeID,
+            senderDeviceName: requesterName,
+            amount: amount.value,
+            memo: memo,
+            modelID: model.id,
+            tokenCount: record.tokenCount
+        )
+
+        do {
+            try await clusterManager.sendCreditTransfer(to: record.peer.id, payload: payload)
+        } catch {
+            return
+        }
+
+        let transferDescription = "Sent \(String(format: "%.2f", amount.value)) credits to \(record.peer.deviceInfo.name) for \(record.tokenCount) tokens of \(model.name)"
+        await wallet.recordTransferDebit(
+            amount: amount,
+            toPeer: peerNodeID,
+            description: transferDescription,
+            modelID: model.id,
+            tokenCount: record.tokenCount
+        )
+
+        if sameOwner {
+            let refundDescription = "Refunded internal LAN inference settlement with \(record.peer.deviceInfo.name) (same account)"
+            await wallet.recordAdjustmentCredit(
+                amount: amount,
+                description: refundDescription,
+                peerNodeID: peerNodeID,
+                modelID: model.id,
+                tokenCount: record.tokenCount
+            )
+        }
+    }
+
+    private func resolveModelDescriptor(for modelID: String?) -> ModelDescriptor? {
+        guard let modelID, !modelID.isEmpty else {
+            return nil
+        }
+
+        return modelDescriptorForExternalID(modelID)
+    }
+
+    private func isInferenceSettlement(_ payload: CreditTransferPayload) -> Bool {
+        payload.modelID != nil || payload.tokenCount != nil
+    }
+
+    private func isSameOwner(peer: PeerInfo) -> Bool {
+        guard let authManager, let currentUser = authManager.currentUser else {
+            return false
+        }
+
+        if let ownerUserID = peer.ownerUserID {
+            return ownerUserID == currentUser.id
+        }
+
+        return authManager.devices.contains { device in
+            guard device.userID == currentUser.id else { return false }
+            guard device.deviceName == peer.deviceInfo.name else { return false }
+
+            if let chipName = device.chipName,
+               chipName != peer.deviceInfo.hardware.chipName {
+                return false
+            }
+
+            if let ramGB = device.ramGB,
+               ramGB != Int(peer.deviceInfo.hardware.totalRAMGB) {
+                return false
+            }
+
+            return true
         }
     }
 
@@ -538,21 +840,10 @@ public final class AppState {
 
                 // Hop back to main actor for UI/engine updates.
                 await MainActor.run {
-                    let wanProvider = WANProvider(localProvider: self.localProvider, wanManager: self.wanManager)
-                    let wallet = self.wallet
-                    Task {
-                        await wanProvider.setOnRemoteInferenceCompleted { tokens, modelName, peerID in
-                            // Find model descriptor for spending record
-                            let model = ModelCatalog.allModels.first { $0.huggingFaceRepo == modelName }
-                            if let model {
-                                await wallet.recordSpending(tokens: tokens, model: model, peer: peerID)
-                            }
-                        }
-                        await self.engine.setProvider(wanProvider)
-                    }
                     self.wanLastError = nil
                     self.isWANBusy = false
                 }
+                await self.applyInferenceBackendSelection()
             } catch {
                 let msg = error.localizedDescription
                 guard let self else { return }
@@ -562,7 +853,7 @@ public final class AppState {
                     self.setWANEnabled(false)
                 }
                 await self.wanManager.disable()
-                await self.engine.setProvider(self.localProvider)
+                await self.applyInferenceBackendSelection()
             }
         }
     }
@@ -574,7 +865,7 @@ public final class AppState {
         }
         Task {
             await wanManager.disable()
-            await engine.setProvider(localProvider)
+            await applyInferenceBackendSelection()
         }
     }
 
@@ -610,6 +901,54 @@ public final class AppState {
         UserDefaults.standard.set(generated, forKey: Preferences.installNodeID)
         return generated
     }
+
+    private func currentServingProvider() -> any InferenceProvider {
+        currentBaseProvider
+    }
+
+    private var normalizedExoPreferredModelID: String? {
+        let trimmed = exoPreferredModelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private var currentBaseProvider: any InferenceProvider {
+        switch inferenceBackend {
+        case .localMLX:
+            return localProvider
+        case .exo:
+            return exoProvider
+        }
+    }
+
+    private func buildActiveInferenceProvider() -> any InferenceProvider {
+        var provider: any InferenceProvider = currentBaseProvider
+
+        if clusterEnabled {
+            provider = ClusterProvider(
+                localProvider: provider,
+                clusterManager: clusterManager,
+                onRemoteGenerationCompleted: { [weak self] record in
+                    await self?.recordRemoteInferenceSettlement(record)
+                }
+            )
+        }
+
+        if wanEnabled {
+            provider = WANProvider(localProvider: provider, wanManager: wanManager)
+        }
+
+        return provider
+    }
+
+    private func applyInferenceBackendSelection() async {
+        await exoProvider.updateConfiguration(
+            baseURLString: exoBaseURL,
+            preferredModelID: normalizedExoPreferredModelID
+        )
+        let provider = buildActiveInferenceProvider()
+        await engine.setProvider(provider)
+        await refreshStatus()
+    }
 }
 
 // MARK: - App View
@@ -624,4 +963,20 @@ public enum AppView: Hashable {
     case agents
     case devices
     case settings
+}
+
+public enum InferenceBackend: String, CaseIterable, Hashable, Identifiable {
+    case localMLX = "local_mlx"
+    case exo = "exo"
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .localMLX:
+            return "Local MLX"
+        case .exo:
+            return "Exo Gateway"
+        }
+    }
 }

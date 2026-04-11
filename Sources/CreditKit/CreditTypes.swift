@@ -53,6 +53,8 @@ public enum TransactionType: String, Codable, Sendable {
     case adjustment
     case transfer
     case sdkEarning    // Earned via TealeSDK contribution (attributed to developer wallet)
+    case deposit      // USDC deposit converted to credits
+    case withdrawal   // Credits converted to USDC withdrawal
 }
 
 // MARK: - CreditTransaction
@@ -66,6 +68,7 @@ public struct CreditTransaction: Codable, Sendable, Identifiable {
     public var peerNodeID: String?
     public var modelID: String?
     public var tokenCount: Int?
+    public var txSignature: String?  // Solana transaction signature for on-chain operations
 
     public init(
         id: UUID = UUID(),
@@ -75,7 +78,8 @@ public struct CreditTransaction: Codable, Sendable, Identifiable {
         description: String,
         peerNodeID: String? = nil,
         modelID: String? = nil,
-        tokenCount: Int? = nil
+        tokenCount: Int? = nil,
+        txSignature: String? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -85,6 +89,7 @@ public struct CreditTransaction: Codable, Sendable, Identifiable {
         self.peerNodeID = peerNodeID
         self.modelID = modelID
         self.tokenCount = tokenCount
+        self.txSignature = txSignature
     }
 }
 

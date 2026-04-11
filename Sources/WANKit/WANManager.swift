@@ -9,6 +9,7 @@ import ClusterKit
 public struct WANState: Sendable {
     public var isEnabled: Bool
     public var connectedPeers: [WANPeerSummary]
+    public var discoveredPeers: [WANPeerInfo]
     public var relayStatus: RelayStatus
     public var publicEndpoint: NATMapping?
     public var natType: NATType
@@ -17,6 +18,7 @@ public struct WANState: Sendable {
     public init(
         isEnabled: Bool = false,
         connectedPeers: [WANPeerSummary] = [],
+        discoveredPeers: [WANPeerInfo] = [],
         relayStatus: RelayStatus = .disconnected,
         publicEndpoint: NATMapping? = nil,
         natType: NATType = .unknown,
@@ -24,6 +26,7 @@ public struct WANState: Sendable {
     ) {
         self.isEnabled = isEnabled
         self.connectedPeers = connectedPeers
+        self.discoveredPeers = discoveredPeers
         self.relayStatus = relayStatus
         self.publicEndpoint = publicEndpoint
         self.natType = natType
@@ -165,12 +168,27 @@ public final class WANManager: @unchecked Sendable {
         self.discoveryService = discovery
         self.natTraversal = nat
 
-        await discovery.setOnPeerDiscovered { [weak self] peer in
-            Task { await self?.handleDiscoveredPeer(peer) }
-        }
+        await discovery.setCallbacks(
+            onPeerDiscovered: { [weak self] peer in
+                Task {
+                    await self?.handleDiscoveredPeer(peer)
+                    await self?.refreshStateSnapshot()
+                }
+            },
+            onPeerLeft: { [weak self] _ in
+                Task { await self?.refreshStateSnapshot() }
+            }
+        )
 
-        // Connect to relay
-        try await relay.connect()
+        // Mark as enabled early so the UI updates
+        isEnabled = true
+
+        // Connect to relay (non-fatal — node stays enabled and retries)
+        do {
+            try await relay.connect()
+        } catch {
+            print("[WAN] Relay connection failed (will retry): \(error.localizedDescription)")
+        }
 
         // Discover public endpoint
         let mapping: NATMapping?
@@ -200,9 +218,13 @@ public final class WANManager: @unchecked Sendable {
             // Non-fatal — we can still make outgoing connections
         }
 
-        // Register and start discovery
+        // Register and start discovery (non-fatal if relay not connected)
         let capabilities = currentCapabilities()
-        try await discovery.start(capabilities: capabilities)
+        do {
+            try await discovery.start(capabilities: capabilities)
+        } catch {
+            print("[WAN] Discovery registration failed (relay may be unavailable): \(error.localizedDescription)")
+        }
 
         // Start relay message listener for offers/answers
         startRelayListener()
@@ -211,7 +233,6 @@ public final class WANManager: @unchecked Sendable {
         startHeartbeatLoop()
         startHealthCheckLoop()
 
-        isEnabled = true
         updateState(mapping: mapping, natType: natType)
     }
 
@@ -301,6 +322,14 @@ public final class WANManager: @unchecked Sendable {
         updateState(mapping: state.publicEndpoint, natType: state.natType)
     }
 
+    /// Connect to a discovered peer by node ID.
+    public func connectToPeer(nodeID: String) async throws {
+        guard let peerInfo = await discoveryService?.peer(byNodeID: nodeID) else {
+            throw WANError.peerConnectionFailed("Peer \(nodeID) is no longer discoverable")
+        }
+        try await connectToPeer(peerInfo)
+    }
+
     /// Get all connected peers
     public var connectedPeerSummaries: [WANPeerSummary] {
         connectedPeers.values.map { peer in
@@ -324,6 +353,22 @@ public final class WANManager: @unchecked Sendable {
     /// Find connected peer with a specific model loaded
     func connectedPeer(withModel modelID: String) -> ConnectedWANPeer? {
         connectedPeers.values.first { $0.peerInfo.hasModel(modelID) }
+    }
+
+    func connectedPeerForInference(preferredModel modelID: String?) -> ConnectedWANPeer? {
+        if let modelID {
+            return connectedPeer(withModel: modelID)
+        }
+
+        return connectedPeers.values
+            .filter { !$0.peerInfo.capabilities.loadedModels.isEmpty }
+            .sorted { lhs, rhs in
+                if lhs.latencyMs != rhs.latencyMs {
+                    return (lhs.latencyMs ?? .infinity) < (rhs.latencyMs ?? .infinity)
+                }
+                return lhs.peerInfo.capabilities.hardware.totalRAMGB > rhs.peerInfo.capabilities.hardware.totalRAMGB
+            }
+            .first
     }
 
     /// Check if any connected peer has a given model
@@ -414,6 +459,7 @@ public final class WANManager: @unchecked Sendable {
                 timestamp: Date()
             )
             try? await peer.connection.send(.heartbeatAck(ack))
+            updateState(mapping: state.publicEndpoint, natType: state.natType)
 
         case .heartbeatAck:
             connectedPeers[peer.peerInfo.nodeID]?.lastHeartbeat = Date()
@@ -706,10 +752,12 @@ public final class WANManager: @unchecked Sendable {
 
     private func updateState(mapping: NATMapping?, natType: NATType) {
         let summaries = connectedPeerSummaries
+        let connectedPeerIDs = Set(summaries.map(\.id))
 
         state = WANState(
             isEnabled: isEnabled,
             connectedPeers: summaries,
+            discoveredPeers: [],
             relayStatus: .disconnected,  // Updated async below
             publicEndpoint: mapping,
             natType: natType,
@@ -720,9 +768,15 @@ public final class WANManager: @unchecked Sendable {
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             let relayStatus = await self.relayClient?.relayStatus ?? .disconnected
-            let peerCount = await self.discoveryService?.peers.count ?? 0
+            let allDiscoveredPeers = await self.discoveryService?.peers ?? []
+            let discoveredPeers = allDiscoveredPeers
+                .filter { !connectedPeerIDs.contains($0.nodeID) }
+                .sorted { lhs, rhs in
+                    lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+                }
             self.state.relayStatus = relayStatus
-            self.state.discoveredPeerCount = peerCount
+            self.state.discoveredPeers = discoveredPeers
+            self.state.discoveredPeerCount = allDiscoveredPeers.count
         }
     }
 
@@ -742,5 +796,9 @@ public final class WANManager: @unchecked Sendable {
             maxModelSizeGB: hardware.availableRAMForModelsGB,
             isAvailable: true
         )
+    }
+
+    private func refreshStateSnapshot() {
+        updateState(mapping: state.publicEndpoint, natType: state.natType)
     }
 }

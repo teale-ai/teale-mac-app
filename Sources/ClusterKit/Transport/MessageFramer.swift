@@ -74,31 +74,20 @@ public class ClusterMessageFramer: NWProtocolFramerImplementation {
 // MARK: - NWParameters Extension
 
 extension NWParameters {
-    /// Create parameters configured with the ClusterMessage framer and TLS
+    /// Create parameters configured with the ClusterMessage framer over plain TCP.
+    ///
+    /// TLS is intentionally disabled until the app provisions a real local identity.
+    /// The previous TLS setup failed every peer handshake with NO_CERTIFICATE_SET.
     public static func clusterParameters(passcode: String? = nil, tlsManager: ClusterTLSManager? = nil) -> NWParameters {
         let tcpOptions = NWProtocolTCP.Options()
         tcpOptions.enableKeepalive = true
         tcpOptions.keepaliveIdle = 10
 
-        // Always use TLS — passcode is a separate auth layer verified during Hello handshake
-        let tlsOptions: NWProtocolTLS.Options
-        tlsOptions = NWProtocolTLS.Options()
-        sec_protocol_options_set_verify_block(
-            tlsOptions.securityProtocolOptions,
-            { _, _, completionHandler in
-                // Accept all certs — TOFU trust managed at application layer after Hello handshake
-                completionHandler(true)
-            },
-            DispatchQueue.global(qos: .userInitiated)
-        )
-        if tlsManager != nil {
-            sec_protocol_options_set_min_tls_protocol_version(
-                tlsOptions.securityProtocolOptions,
-                .TLSv12
-            )
-        }
+        // App-layer passcode validation still happens during Hello / HelloAck.
+        _ = passcode
+        _ = tlsManager
 
-        let params = NWParameters(tls: tlsOptions, tcp: tcpOptions)
+        let params = NWParameters(tls: nil, tcp: tcpOptions)
 
         let framerOptions = NWProtocolFramer.Options(definition: ClusterMessageFramer.definition)
         params.defaultProtocolStack.applicationProtocols.insert(framerOptions, at: 0)

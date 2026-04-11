@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import OSLog
 import SharedTypes
 
 // MARK: - Bonjour Service
@@ -8,11 +9,14 @@ import SharedTypes
 @Observable
 public final class BonjourService: @unchecked Sendable {
     public static let serviceType = "_teale._tcp"
+    private static let logger = Logger(subsystem: "com.teale.app", category: "ClusterBonjour")
 
     private var listener: NWListener?
     private var browser: NWBrowser?
     private let localDeviceID: UUID
+    private let localServiceNames: Set<String>
     private let parameters: NWParameters
+    private var visiblePeerEndpoints: [String: NWEndpoint] = [:]
 
     public private(set) var isAdvertising: Bool = false
     public private(set) var isBrowsing: Bool = false
@@ -27,6 +31,7 @@ public final class BonjourService: @unchecked Sendable {
 
     public init(localDeviceID: UUID, parameters: NWParameters = .clusterParameters()) {
         self.localDeviceID = localDeviceID
+        self.localServiceNames = Self.makeLocalServiceNames()
         self.parameters = parameters
     }
 
@@ -49,6 +54,7 @@ public final class BonjourService: @unchecked Sendable {
         )
 
         listener.stateUpdateHandler = { [weak self] state in
+            Self.logger.info("Listener state changed: \(String(describing: state), privacy: .public)")
             DispatchQueue.main.async {
                 switch state {
                 case .ready:
@@ -72,10 +78,17 @@ public final class BonjourService: @unchecked Sendable {
     // MARK: - Browse
 
     public func startBrowsing() {
+        guard browser == nil else { return }
+
         let browserDescriptor = NWBrowser.Descriptor.bonjour(type: Self.serviceType, domain: nil)
-        let browser = NWBrowser(for: browserDescriptor, using: parameters)
+        // NWBrowser must use minimal parameters — TLS and custom framers prevent mDNS discovery.
+        // Connection-level parameters (TLS, framer) are applied later when connecting to a peer.
+        let browseParams = NWParameters()
+        browseParams.includePeerToPeer = true
+        let browser = NWBrowser(for: browserDescriptor, using: browseParams)
 
         browser.stateUpdateHandler = { [weak self] state in
+            Self.logger.info("Browser state changed: \(String(describing: state), privacy: .public)")
             DispatchQueue.main.async {
                 switch state {
                 case .ready:
@@ -90,23 +103,46 @@ public final class BonjourService: @unchecked Sendable {
 
         browser.browseResultsChangedHandler = { [weak self] results, changes in
             guard let self = self else { return }
+            Self.logger.info("Browse results changed: results=\(results.count) changes=\(changes.count)")
             DispatchQueue.main.async {
                 self.discoveredEndpoints = Array(results)
             }
 
-            for change in changes {
-                switch change {
-                case .added(let result):
-                    let txtDict = self.parseTXTRecord(result)
-                    // Filter out self
-                    if txtDict["deviceID"] != self.localDeviceID.uuidString {
-                        self.onPeerDiscovered?(result.endpoint, txtDict)
-                    }
-                case .removed(let result):
-                    self.onPeerRemoved?(result.endpoint)
-                default:
-                    break
+            var currentPeers: [String: (endpoint: NWEndpoint, txtDict: [String: String])] = [:]
+            for result in results {
+                let txtDict = self.parseTXTRecord(result)
+                Self.logger.info("Result endpoint=\(String(describing: result.endpoint), privacy: .public) txt=\(String(describing: txtDict), privacy: .public)")
+                let peerKey = self.peerKey(for: result.endpoint, txtDict: txtDict)
+
+                // NWBrowser sometimes omits Bonjour TXT metadata even when the service
+                // is advertising it correctly. Fall back to the local service name so
+                // we do not waste scans repeatedly connecting to ourselves.
+                if self.isLikelySelfEndpoint(result.endpoint, txtDict: txtDict) {
+                    Self.logger.info("Skipping self endpoint=\(String(describing: result.endpoint), privacy: .public)")
+                    continue
                 }
+
+                // Bonjour can report the same peer on multiple interfaces. Keep the
+                // first visible endpoint per peer key and dedupe the rest.
+                if currentPeers[peerKey] == nil {
+                    currentPeers[peerKey] = (result.endpoint, txtDict)
+                }
+            }
+
+            let removedPeerKeys = Set(self.visiblePeerEndpoints.keys).subtracting(currentPeers.keys)
+            for peerKey in removedPeerKeys {
+                if let endpoint = self.visiblePeerEndpoints.removeValue(forKey: peerKey) {
+                    Self.logger.info("Peer removed from browse set: \(peerKey, privacy: .public) endpoint=\(String(describing: endpoint), privacy: .public)")
+                    self.onPeerRemoved?(endpoint)
+                }
+            }
+
+            for (peerKey, peer) in currentPeers {
+                if self.visiblePeerEndpoints[peerKey] == nil {
+                    Self.logger.info("Peer discovered from browse set: \(peerKey, privacy: .public) endpoint=\(String(describing: peer.endpoint), privacy: .public)")
+                    self.onPeerDiscovered?(peer.endpoint, peer.txtDict)
+                }
+                self.visiblePeerEndpoints[peerKey] = peer.endpoint
             }
         }
 
@@ -114,16 +150,21 @@ public final class BonjourService: @unchecked Sendable {
         self.browser = browser
     }
 
+    public func stopBrowsing() {
+        browser?.cancel()
+        browser = nil
+        isBrowsing = false
+        discoveredEndpoints = []
+        visiblePeerEndpoints.removeAll()
+    }
+
     // MARK: - Stop
 
     public func stop() {
         listener?.cancel()
-        browser?.cancel()
         listener = nil
-        browser = nil
+        stopBrowsing()
         isAdvertising = false
-        isBrowsing = false
-        discoveredEndpoints = []
     }
 
     // MARK: - Helpers
@@ -133,6 +174,51 @@ public final class BonjourService: @unchecked Sendable {
             return txtRecord.toDictionary(knownKeys: ["deviceID", "chip", "ram", "version"])
         }
         return [:]
+    }
+
+    private static func makeLocalServiceNames() -> Set<String> {
+        var names: Set<String> = []
+
+        if let localizedName = Host.current().localizedName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !localizedName.isEmpty {
+            names.insert(localizedName)
+        }
+
+        let hostName = ProcessInfo.processInfo.hostName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !hostName.isEmpty {
+            names.insert(hostName)
+            names.insert(hostName.replacingOccurrences(of: ".local", with: ""))
+        }
+
+        return names
+    }
+
+    private func isLikelySelfEndpoint(_ endpoint: NWEndpoint, txtDict: [String: String]) -> Bool {
+        if let deviceIDString = txtDict["deviceID"],
+           let deviceID = UUID(uuidString: deviceIDString),
+           deviceID == localDeviceID {
+            return true
+        }
+
+        guard let serviceName = serviceName(from: endpoint) else {
+            return false
+        }
+
+        return localServiceNames.contains(serviceName)
+    }
+
+    private func serviceName(from endpoint: NWEndpoint) -> String? {
+        guard case let .service(name: name, type: _, domain: _, interface: _) = endpoint else {
+            return nil
+        }
+        return name
+    }
+
+    private func peerKey(for endpoint: NWEndpoint, txtDict: [String: String]) -> String {
+        if let deviceID = txtDict["deviceID"], !deviceID.isEmpty {
+            return "id:\(deviceID)"
+        }
+        return "endpoint:\(String(describing: endpoint))"
     }
 }
 

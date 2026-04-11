@@ -6,13 +6,31 @@ import SharedTypes
 /// InferenceProvider that routes requests through the cluster.
 /// In standalone mode, delegates to local provider. In cluster mode, uses RequestRouter.
 public actor ClusterProvider: InferenceProvider {
+    public struct RemoteGenerationRecord: Sendable {
+        public let peer: PeerInfo
+        public let modelID: String
+        public let tokenCount: Int
+
+        public init(peer: PeerInfo, modelID: String, tokenCount: Int) {
+            self.peer = peer
+            self.modelID = modelID
+            self.tokenCount = tokenCount
+        }
+    }
+
     private let localProvider: any InferenceProvider
     private let clusterManager: ClusterManager
     private let router = RequestRouter()
+    private let onRemoteGenerationCompleted: (@Sendable (RemoteGenerationRecord) async -> Void)?
 
-    public init(localProvider: any InferenceProvider, clusterManager: ClusterManager) {
+    public init(
+        localProvider: any InferenceProvider,
+        clusterManager: ClusterManager,
+        onRemoteGenerationCompleted: (@Sendable (RemoteGenerationRecord) async -> Void)? = nil
+    ) {
         self.localProvider = localProvider
         self.clusterManager = clusterManager
+        self.onRemoteGenerationCompleted = onRemoteGenerationCompleted
     }
 
     public var status: EngineStatus {
@@ -105,18 +123,27 @@ public actor ClusterProvider: InferenceProvider {
     ) async throws {
         let requestID = UUID()
         let payload = InferenceRequestPayload(requestID: requestID, request: request, streaming: true)
+        var tokenCount = 0
+        var modelID = request.model
 
-        // Send request to peer
+        // Subscribe before sending so a fast peer cannot race the reply past us.
+        let messages = await peer.connection.incomingMessages
         try await peer.connection.send(.inferenceRequest(payload))
 
-        // Listen for response chunks
-        let messages = await peer.connection.incomingMessages
         for await message in messages {
             switch message {
             case .inferenceChunk(let chunkPayload) where chunkPayload.requestID == requestID:
+                modelID = modelID ?? chunkPayload.chunk.model
+                if let content = chunkPayload.chunk.choices.first?.delta.content, !content.isEmpty {
+                    tokenCount += 1
+                }
                 continuation.yield(chunkPayload.chunk)
 
             case .inferenceComplete(let completePayload) where completePayload.requestID == requestID:
+                if let modelID, tokenCount > 0 {
+                    let record = RemoteGenerationRecord(peer: peer, modelID: modelID, tokenCount: tokenCount)
+                    await onRemoteGenerationCompleted?(record)
+                }
                 continuation.finish()
                 return
 

@@ -1,6 +1,5 @@
 import Foundation
 
-/// Configuration for connecting to Supabase.
 /// Reads from bundled AuthKit resources first, then app-level overrides, then environment variables.
 public struct SupabaseConfig: Sendable {
     public let url: URL
@@ -15,7 +14,10 @@ public struct SupabaseConfig: Sendable {
 
     /// Load config from bundled AuthKit resources, app overrides, then environment variables.
     public static var `default`: SupabaseConfig? {
-        if let config = loadFromPlist(bundle: Bundle.module) {
+        // Bundle.module triggers a fatalError if the AuthKit resource bundle isn't found
+        // in the app package.  Guard against that by probing for the bundle first.
+        if let moduleBundle = Self.authKitBundle,
+           let config = loadFromPlist(bundle: moduleBundle) {
             return config
         }
 
@@ -33,6 +35,34 @@ public struct SupabaseConfig: Sendable {
         }
 
         return nil
+    }
+
+    /// Safely resolve the AuthKit resource bundle without triggering `Bundle.module`'s fatalError
+    /// when the resource bundle isn't embedded in the app package.
+    private static var authKitBundle: Bundle? {
+        #if SWIFT_PACKAGE
+        final class BundleFinder {}
+        let bundleNames = [
+            "InferencePool_AuthKit",
+            "AuthKit_AuthKit",
+        ]
+        let candidates = [
+            Bundle.main.resourceURL,
+            Bundle(for: BundleFinder.self).resourceURL,
+            Bundle.main.bundleURL,
+        ]
+        for candidate in candidates {
+            for bundleName in bundleNames {
+                let bundlePath = candidate?.appendingPathComponent(bundleName + ".bundle")
+                if let bundlePath, let bundle = Bundle(url: bundlePath) {
+                    return bundle
+                }
+            }
+        }
+        return nil
+        #else
+        return nil
+        #endif
     }
 
     private static func loadFromPlist(bundle: Bundle) -> SupabaseConfig? {

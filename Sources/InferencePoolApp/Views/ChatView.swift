@@ -22,14 +22,14 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // No model banner — only show if nothing downloaded at all
-            if !hasModelLoaded && availableModels.isEmpty {
+            // No model banner
+            if !hasInferenceTarget {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
-                    Text("No model loaded.")
+                    Text(appState.loc("chat.noModelLoaded"))
                         .font(.callout.weight(.medium))
-                    Text("Go to **Models** to download and load one.")
+                    Text(appState.loc("chat.goToModels"))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -59,7 +59,7 @@ struct ChatView: View {
                                 HStack(spacing: 6) {
                                     ProgressView()
                                         .controlSize(.small)
-                                    Text("Thinking...")
+                                    Text(appState.loc("chat.thinking"))
                                         .font(.callout)
                                         .foregroundStyle(.secondary)
                                 }
@@ -76,11 +76,11 @@ struct ChatView: View {
                             Image(systemName: "brain.head.profile")
                                 .font(.system(size: 36))
                                 .foregroundStyle(.quaternary)
-                            Text("Start a conversation")
+                            Text(appState.loc("chat.startConversation"))
                                 .font(.title3)
                                 .foregroundStyle(.secondary)
-                            if hasModelLoaded {
-                                Text("Type a message below to begin")
+                            if hasInferenceTarget {
+                                Text(appState.loc("chat.typeBelow"))
                                     .font(.caption)
                                     .foregroundStyle(.tertiary)
                             }
@@ -126,7 +126,7 @@ struct ChatView: View {
                 .padding(.bottom, 4)
 
                 HStack(alignment: .bottom, spacing: 8) {
-                    TextField("Message...", text: $messageText, axis: .vertical)
+                    TextField(appState.loc("chat.message"), text: $messageText, axis: .vertical)
                         .textFieldStyle(.plain)
                         .lineLimit(1...8)
                         .padding(8)
@@ -146,7 +146,7 @@ struct ChatView: View {
                 .padding(.bottom, 10)
             }
         }
-        .navigationTitle("Chat")
+        .navigationTitle(appState.loc("chat.title"))
         .onAppear {
             // Use the first conversation or create one — single continuous chat
             if let first = appState.conversationStore.conversations.first {
@@ -157,9 +157,8 @@ struct ChatView: View {
         }
     }
 
-    private var hasModelLoaded: Bool {
-        if case .ready = appState.engineStatus { return true }
-        return false
+    private var hasInferenceTarget: Bool {
+        appState.hasAvailableInferenceTarget
     }
 
     private var canSend: Bool {
@@ -244,8 +243,8 @@ struct ChatView: View {
     }
 
     private func generateResponse(for conversation: Conversation) async {
-        guard hasModelLoaded else {
-            let _ = appState.conversationStore.addMessage(to: conversation, role: "assistant", content: "No model loaded. Go to Models to download and load one.")
+        guard hasInferenceTarget else {
+            let _ = appState.conversationStore.addMessage(to: conversation, role: "assistant", content: appState.loc("chat.noModelResponse"))
             return
         }
 
@@ -278,6 +277,7 @@ struct ChatView: View {
 // MARK: - Chat Bubble
 
 private struct ChatBubbleView: View {
+    @Environment(AppState.self) private var appState
     let role: String
     let content: String
 
@@ -291,7 +291,7 @@ private struct ChatBubbleView: View {
                 .frame(width: 24)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(isUser ? "You" : "Assistant")
+                Text(isUser ? appState.loc("chat.you") : appState.loc("chat.assistant"))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
 

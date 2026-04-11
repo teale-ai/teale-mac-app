@@ -29,17 +29,37 @@ struct ClusterView: View {
                     // This device
                     ThisDeviceCard()
 
+                    DiscoveryControlsView()
+
+                    if let connectionNotice = appState.clusterManager.connectionNotice {
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.yellow)
+                            Text(connectionNotice)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(12)
+                        .background(.quaternary.opacity(0.6))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+
                     // Peer devices
                     if appState.clusterManager.peerSummaries.isEmpty {
                         VStack(spacing: 8) {
-                            Image(systemName: "magnifyingglass")
+                            Image(systemName: appState.clusterManager.isScanning ? "magnifyingglass" : "desktopcomputer")
                                 .font(.largeTitle)
                                 .foregroundStyle(.secondary)
-                            Text("Searching for devices on your network...")
+                            Text(appState.clusterManager.isScanning ? "Scanning your network..." : "No connected devices yet")
                                 .foregroundStyle(.secondary)
-                            Text("Run Teale on another Mac on the same network")
+                            Text(
+                                appState.clusterManager.isScanning
+                                ? "Looking for nearby Macs running Teale"
+                                : "Teale is available on this Mac and waiting for nearby devices to connect"
+                            )
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
+                                .multilineTextAlignment(.center)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 24)
@@ -56,7 +76,7 @@ struct ClusterView: View {
                         Text("Enable LAN Cluster to connect your Macs into a unified inference network")
                             .multilineTextAlignment(.center)
                             .foregroundStyle(.secondary)
-                        Text("Devices on the same network will automatically discover each other")
+                        Text("Devices on the same network can discover each other when Local Network access is allowed")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .multilineTextAlignment(.center)
@@ -68,6 +88,40 @@ struct ClusterView: View {
             .padding()
         }
         .navigationTitle("Cluster")
+        .onAppear {
+            guard appState.clusterEnabled else { return }
+            appState.clusterManager.scanForPeers()
+        }
+    }
+}
+
+private struct DiscoveryControlsView: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if appState.clusterManager.isScanning {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Scanning for devices...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Stop") {
+                    appState.clusterManager.stopScanning()
+                }
+                .buttonStyle(.bordered)
+            } else {
+                Text("Teale scans briefly when Cluster turns on or when this screen opens.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Scan Again") {
+                    appState.clusterManager.scanForPeers()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
     }
 }
 
@@ -149,6 +203,7 @@ private struct ThisDeviceCard: View {
 // MARK: - Peer Card
 
 struct PeerCardView: View {
+    @Environment(AppState.self) private var appState
     let peer: PeerSummary
 
     var body: some View {
@@ -187,6 +242,12 @@ struct PeerCardView: View {
                 Text(peer.status.rawValue.capitalized)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                Button(appState.loc("wallet.sendCredits")) {
+                    appState.pendingWalletTransferPeerID = peer.id
+                    appState.currentView = .wallet
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
         }
         .padding(12)

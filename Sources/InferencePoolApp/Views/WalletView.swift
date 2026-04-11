@@ -2,6 +2,7 @@ import SwiftUI
 import CreditKit
 import SharedTypes
 import ClusterKit
+import WalletKit
 
 struct WalletView: View {
     @Environment(AppState.self) private var appState
@@ -11,6 +12,12 @@ struct WalletView: View {
             VStack(alignment: .leading, spacing: 16) {
                 // Balance Card
                 BalanceCard()
+
+                // Solana Wallet (if enabled)
+                if appState.walletBridge != nil {
+                    Divider()
+                    SolanaWalletSection()
+                }
 
                 Divider()
 
@@ -34,7 +41,7 @@ struct WalletView: View {
             }
             .padding()
         }
-        .navigationTitle("Wallet")
+        .navigationTitle(appState.loc("wallet.title"))
     }
 }
 
@@ -45,7 +52,7 @@ private struct BalanceCard: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Text("Credit Balance")
+            Text(appState.loc("wallet.balance"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -53,9 +60,15 @@ private struct BalanceCard: View {
                 .font(.system(size: 36, weight: .bold, design: .rounded))
                 .foregroundStyle(.primary)
 
-            Text("credits")
+            Text(appState.loc("wallet.credits"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            if appState.walletBridge != nil {
+                Text(appState.wallet.balance.usdFormatted + " USDC")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 16)
@@ -80,7 +93,7 @@ private struct SendCreditsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Send Credits")
+            Text(appState.loc("wallet.sendCredits"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -88,7 +101,7 @@ private struct SendCreditsSection: View {
                 HStack(spacing: 6) {
                     Image(systemName: "network.slash")
                         .foregroundStyle(.secondary)
-                    Text("Connect to a cluster to send credits to peers")
+                    Text(appState.loc("wallet.connectCluster"))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -96,7 +109,7 @@ private struct SendCreditsSection: View {
             } else {
                 VStack(spacing: 8) {
                     Picker("To", selection: $selectedPeerID) {
-                        Text("Select peer...").tag(UUID?.none)
+                        Text(appState.loc("wallet.selectPeer")).tag(UUID?.none)
                         ForEach(connectedPeers) { peer in
                             Text(peer.name).tag(UUID?.some(peer.id))
                         }
@@ -104,11 +117,11 @@ private struct SendCreditsSection: View {
                     .pickerStyle(.menu)
 
                     HStack(spacing: 8) {
-                        TextField("Amount", text: $amountText)
+                        TextField(appState.loc("wallet.amount"), text: $amountText)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 80)
 
-                        TextField("Memo (optional)", text: $memo)
+                        TextField(appState.loc("wallet.memo"), text: $memo)
                             .textFieldStyle(.roundedBorder)
 
                         Button {
@@ -118,7 +131,7 @@ private struct SendCreditsSection: View {
                                 ProgressView()
                                     .controlSize(.small)
                             } else {
-                                Text("Send")
+                                Text(appState.loc("wallet.send"))
                             }
                         }
                         .buttonStyle(.borderedProminent)
@@ -133,6 +146,12 @@ private struct SendCreditsSection: View {
                         .transition(.opacity)
                 }
             }
+        }
+        .onAppear {
+            applyPendingPeerSelection()
+        }
+        .onChange(of: connectedPeers.map(\.id)) {
+            applyPendingPeerSelection()
         }
     }
 
@@ -163,6 +182,19 @@ private struct SendCreditsSection: View {
             }
         }
     }
+
+    private func applyPendingPeerSelection() {
+        if let pendingPeerID = appState.pendingWalletTransferPeerID,
+           connectedPeers.contains(where: { $0.id == pendingPeerID }) {
+            selectedPeerID = pendingPeerID
+            appState.pendingWalletTransferPeerID = nil
+            return
+        }
+
+        if selectedPeerID == nil, connectedPeers.count == 1 {
+            selectedPeerID = connectedPeers[0].id
+        }
+    }
 }
 
 // MARK: - Pricing Guide
@@ -170,66 +202,98 @@ private struct SendCreditsSection: View {
 private struct PricingGuideSection: View {
     @Environment(AppState.self) private var appState
 
-    private struct ModelEstimate: Identifiable {
-        var id: String { label }
-        let label: String
-        let paramB: Double
-        let tokensFor100Credits: Int
-        let approxChats: String
+    private struct UsageExample: Identifiable {
+        var id: String { emoji + title }
+        let emoji: String
+        let title: String
+        let detail: String
+        let creditCost: String
     }
 
-    private var estimates: [ModelEstimate] {
+    private var balance: Double {
+        appState.wallet.balance.value
+    }
+
+    private var examples: [UsageExample] {
         [
-            ModelEstimate(label: "Small (1-4B)", paramB: 3, tokensFor100Credits: tokenBudget(paramB: 3), approxChats: "~hundreds of chats"),
-            ModelEstimate(label: "Medium (8B)", paramB: 8, tokensFor100Credits: tokenBudget(paramB: 8), approxChats: "~50-100 chats"),
-            ModelEstimate(label: "Large (27-32B)", paramB: 30, tokensFor100Credits: tokenBudget(paramB: 30), approxChats: "~10-20 chats"),
-            ModelEstimate(label: "XL (70B+)", paramB: 70, tokensFor100Credits: tokenBudget(paramB: 70), approxChats: "~5-10 chats"),
+            UsageExample(
+                emoji: "💬",
+                title: appState.loc("wallet.quickQuestion"),
+                detail: appState.loc("wallet.quickQuestionDetail"),
+                creditCost: "~0.5 credits"
+            ),
+            UsageExample(
+                emoji: "📝",
+                title: appState.loc("wallet.writeEmail"),
+                detail: appState.loc("wallet.writeEmailDetail"),
+                creditCost: "~1-2 credits"
+            ),
+            UsageExample(
+                emoji: "💻",
+                title: appState.loc("wallet.debugCode"),
+                detail: appState.loc("wallet.debugCodeDetail"),
+                creditCost: "~2-5 credits"
+            ),
+            UsageExample(
+                emoji: "📖",
+                title: appState.loc("wallet.summarize"),
+                detail: appState.loc("wallet.summarizeDetail"),
+                creditCost: "~3-8 credits"
+            ),
         ]
     }
 
-    private func tokenBudget(paramB: Double) -> Int {
-        // cost = (tokens/1000) * (paramB * 0.1) * 1.0 (q4)
-        // tokens = 100 * 1000 / (paramB * 0.1)
-        Int(100.0 * 1000.0 / (paramB * 0.1))
-    }
-
-    private func formatTokens(_ count: Int) -> String {
-        if count >= 1_000_000 {
-            return String(format: "%.0fM", Double(count) / 1_000_000)
-        } else if count >= 1_000 {
-            return String(format: "%.0fK", Double(count) / 1_000)
+    private var balanceSummary: String {
+        if balance >= 100 {
+            return appState.loc("wallet.balancePlenty")
+        } else if balance >= 30 {
+            return appState.loc("wallet.balanceGood")
+        } else if balance >= 10 {
+            return appState.loc("wallet.balanceOk")
+        } else if balance > 0 {
+            return appState.loc("wallet.balanceLow")
+        } else {
+            return appState.loc("wallet.balanceEmpty")
         }
-        return "\(count)"
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("What Can Your Credits Buy?")
+            Text(appState.loc("wallet.whatCanBuy"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
-            VStack(spacing: 6) {
-                ForEach(estimates) { est in
-                    HStack {
-                        Text(est.label)
-                            .font(.caption)
-                            .frame(width: 100, alignment: .leading)
-                        Text("~\(formatTokens(est.tokensFor100Credits)) tokens")
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.primary)
+            Text(balanceSummary)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .padding(.bottom, 2)
+
+            VStack(spacing: 2) {
+                ForEach(examples) { ex in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text(ex.emoji)
+                            .font(.body)
+                            .frame(width: 20)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(ex.title)
+                                .font(.caption.bold())
+                            Text(ex.detail)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                         Spacer()
-                        Text(est.approxChats)
-                            .font(.caption2)
+                        Text(ex.creditCost)
+                            .font(.caption2.monospacedDigit())
                             .foregroundStyle(.tertiary)
                     }
-                    .padding(.vertical, 3)
+                    .padding(.vertical, 5)
                     .padding(.horizontal, 8)
                 }
             }
-            .padding(.vertical, 8)
+            .padding(.vertical, 4)
             .background(.blue.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
 
-            Text("Estimates based on 100 credits with 4-bit quantization. Larger models cost more per token but produce higher quality output. You earn credits by serving inference to other nodes on the network.")
+            Text(appState.loc("wallet.pricingFooter"))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -243,7 +307,7 @@ private struct CreditSummarySection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Summary")
+            Text(appState.loc("wallet.summary"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -255,7 +319,7 @@ private struct CreditSummarySection: View {
                         Text(String(format: "%.2f", appState.wallet.totalEarned.value))
                             .font(.headline)
                     }
-                    Text("Earned")
+                    Text(appState.loc("wallet.earned"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -271,7 +335,7 @@ private struct CreditSummarySection: View {
                         Text(String(format: "%.2f", appState.wallet.totalSpent.value))
                             .font(.headline)
                     }
-                    Text("Spent")
+                    Text(appState.loc("wallet.spent"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -296,7 +360,7 @@ private struct TransactionsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Recent Transactions")
+                Text(appState.loc("wallet.recentTransactions"))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -310,7 +374,7 @@ private struct TransactionsSection: View {
                     Image(systemName: "clock")
                         .font(.title2)
                         .foregroundStyle(.secondary)
-                    Text("No transactions yet")
+                    Text(appState.loc("wallet.noTransactions"))
                         .foregroundStyle(.secondary)
                     Text("Start chatting or serve inference to see transactions here")
                         .font(.caption)
@@ -367,24 +431,158 @@ private struct TransactionRow: View {
         case .bonus: return "gift.fill"
         case .adjustment: return "arrow.left.arrow.right"
         case .transfer: return isSentTransfer ? "arrow.up.right.circle.fill" : "arrow.down.left.circle.fill"
+        case .deposit: return "arrow.down.to.line.circle.fill"
+        case .withdrawal: return "arrow.up.to.line.circle.fill"
         }
     }
 
     private var iconColor: Color {
         switch transaction.type {
-        case .earned, .bonus, .sdkEarning: return .green
-        case .spent: return .red
+        case .earned, .bonus, .sdkEarning, .deposit: return .green
+        case .spent, .withdrawal: return .red
         case .adjustment: return .blue
         case .transfer: return isSentTransfer ? .orange : .blue
         }
     }
 
     private var amountText: String {
-        let sign = (transaction.type == .spent || isSentTransfer) ? "-" : "+"
+        let sign = (transaction.type == .spent || transaction.type == .withdrawal || isSentTransfer) ? "-" : "+"
         return "\(sign)\(String(format: "%.2f", transaction.amount.value))"
     }
 
     private var amountColor: Color {
-        (transaction.type == .spent || isSentTransfer) ? .red : .green
+        (transaction.type == .spent || transaction.type == .withdrawal || isSentTransfer) ? .red : .green
+    }
+}
+
+// MARK: - Solana Wallet Section
+
+private struct SolanaWalletSection: View {
+    @Environment(AppState.self) private var appState
+    @State private var withdrawAmount: String = ""
+    @State private var destinationAddress: String = ""
+    @State private var isWithdrawing: Bool = false
+    @State private var withdrawResult: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(appState.loc("wallet.solana.title"), systemImage: "link.circle.fill")
+                .font(.headline)
+
+            if let bridge = appState.walletBridge {
+                // Address display
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(appState.loc("wallet.solana.address"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(bridge.solanaAddress)
+                            .font(.system(.caption2, design: .monospaced))
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(bridge.solanaAddress, forType: .string)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(10)
+                .background(.quaternary.opacity(0.3))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                // USDC Balance
+                HStack {
+                    Text(appState.loc("wallet.solana.onChainBalance"))
+                        .font(.subheadline)
+                    Spacer()
+                    Text(bridge.usdcBalanceFormatted + " USDC")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.green)
+                }
+
+                // Deposit instructions
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(appState.loc("wallet.solana.depositTitle"))
+                        .font(.caption.bold())
+                    Text(appState.loc("wallet.solana.depositInstructions"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.blue.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                // Withdraw form
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(appState.loc("wallet.solana.withdrawTitle"))
+                        .font(.caption.bold())
+
+                    HStack(spacing: 8) {
+                        TextField(appState.loc("wallet.solana.creditsAmount"), text: $withdrawAmount)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 100)
+
+                        TextField(appState.loc("wallet.solana.destinationAddress"), text: $destinationAddress)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+
+                        Button {
+                            Task { await performWithdrawal(bridge: bridge) }
+                        } label: {
+                            if isWithdrawing {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Text(appState.loc("wallet.solana.withdrawButton"))
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(isWithdrawing || withdrawAmount.isEmpty || destinationAddress.isEmpty)
+                    }
+
+                    if let result = withdrawResult {
+                        Text(result)
+                            .font(.caption)
+                            .foregroundStyle(result.contains("Success") ? .green : .red)
+                    }
+                }
+
+                // Error display
+                if let error = bridge.lastError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+        }
+    }
+
+    private func performWithdrawal(bridge: WalletBridge) async {
+        guard let amount = Double(withdrawAmount), amount > 0 else {
+            withdrawResult = "Invalid amount"
+            return
+        }
+
+        isWithdrawing = true
+        withdrawResult = nil
+
+        do {
+            let credits = CreditAmount(amount)
+            let sig = try await bridge.withdraw(creditAmount: credits, to: destinationAddress)
+            withdrawResult = "Success! Tx: \(sig.prefix(16))..."
+            withdrawAmount = ""
+            destinationAddress = ""
+        } catch {
+            withdrawResult = error.localizedDescription
+        }
+
+        isWithdrawing = false
     }
 }

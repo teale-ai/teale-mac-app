@@ -50,12 +50,20 @@ public struct HelloPayload: Codable, Sendable {
     public var protocolVersion: Int
     public var clusterPasscodeHash: String?
     public var loadedModels: [String]
+    public var ownerUserID: UUID?
 
-    public init(deviceInfo: DeviceInfo, protocolVersion: Int = 1, clusterPasscodeHash: String? = nil, loadedModels: [String] = []) {
+    public init(
+        deviceInfo: DeviceInfo,
+        protocolVersion: Int = 1,
+        clusterPasscodeHash: String? = nil,
+        loadedModels: [String] = [],
+        ownerUserID: UUID? = nil
+    ) {
         self.deviceInfo = deviceInfo
         self.protocolVersion = protocolVersion
         self.clusterPasscodeHash = clusterPasscodeHash
         self.loadedModels = loadedModels
+        self.ownerUserID = ownerUserID
     }
 }
 
@@ -70,8 +78,19 @@ public struct HeartbeatPayload: Codable, Sendable {
     public var isGenerating: Bool
     public var queueDepth: Int
     public var organizationID: String?  // Optional for backward compat
+    public var ownerUserID: UUID?
 
-    public init(deviceID: UUID, timestamp: Date = Date(), thermalLevel: ThermalLevel = .nominal, throttleLevel: Int = 100, loadedModels: [String] = [], isGenerating: Bool = false, queueDepth: Int = 0, organizationID: String? = nil) {
+    public init(
+        deviceID: UUID,
+        timestamp: Date = Date(),
+        thermalLevel: ThermalLevel = .nominal,
+        throttleLevel: Int = 100,
+        loadedModels: [String] = [],
+        isGenerating: Bool = false,
+        queueDepth: Int = 0,
+        organizationID: String? = nil,
+        ownerUserID: UUID? = nil
+    ) {
         self.deviceID = deviceID
         self.timestamp = timestamp
         self.thermalLevel = thermalLevel
@@ -80,6 +99,7 @@ public struct HeartbeatPayload: Codable, Sendable {
         self.isGenerating = isGenerating
         self.queueDepth = queueDepth
         self.organizationID = organizationID
+        self.ownerUserID = ownerUserID
     }
 }
 
@@ -188,14 +208,28 @@ public struct ModelTransferCompletePayload: Codable, Sendable {
 public struct CreditTransferPayload: Codable, Sendable {
     public var transferID: UUID
     public var senderNodeID: String
+    public var senderDeviceName: String?
     public var amount: Double
     public var memo: String?
+    public var modelID: String?
+    public var tokenCount: Int?
 
-    public init(transferID: UUID = UUID(), senderNodeID: String, amount: Double, memo: String? = nil) {
+    public init(
+        transferID: UUID = UUID(),
+        senderNodeID: String,
+        senderDeviceName: String? = nil,
+        amount: Double,
+        memo: String? = nil,
+        modelID: String? = nil,
+        tokenCount: Int? = nil
+    ) {
         self.transferID = transferID
         self.senderNodeID = senderNodeID
+        self.senderDeviceName = senderDeviceName
         self.amount = amount
         self.memo = memo
+        self.modelID = modelID
+        self.tokenCount = tokenCount
     }
 }
 
