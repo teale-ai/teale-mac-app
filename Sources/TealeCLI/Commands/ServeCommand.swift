@@ -53,20 +53,7 @@ struct Serve: AsyncParsableCommand {
         if wan { printErr("WAN P2P: enabled") }
         printErr("Press Ctrl+C to stop")
 
-        // Block until SIGINT/SIGTERM
-        let source = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-        signal(SIGINT, SIG_IGN)
-        signal(SIGTERM, SIG_IGN)
-
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            source.setEventHandler { continuation.resume() }
-            source.resume()
-
-            let termSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-            termSource.setEventHandler { continuation.resume() }
-            termSource.resume()
-        }
-
+        await awaitShutdownSignal()
         printErr("\nShutting down...")
     }
 
@@ -87,14 +74,4 @@ struct Serve: AsyncParsableCommand {
         await appState.loadModel(descriptor)
         printErr("Model loaded: \(descriptor.name)")
     }
-}
-
-private func printErr(_ message: String) {
-    FileHandle.standardError.write(Data("[\(timestamp())] \(message)\n".utf8))
-}
-
-private func timestamp() -> String {
-    let formatter = DateFormatter()
-    formatter.dateFormat = "HH:mm:ss"
-    return formatter.string(from: Date())
 }

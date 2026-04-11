@@ -178,6 +178,7 @@ let package = Package(
                 "AppCore",
                 "SharedTypes",
                 "LocalAPI",
+                "AuthKit",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
