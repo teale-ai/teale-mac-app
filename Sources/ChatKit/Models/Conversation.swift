@@ -52,6 +52,8 @@ public struct Conversation: Codable, Sendable, Identifiable, Equatable {
     public var lastMessageAt: Date?
     public var lastMessagePreview: String?
     public var isArchived: Bool
+    /// Key rotation epoch — incremented when a member leaves and keys rotate.
+    public var groupKeyVersion: Int
 
     public init(
         id: UUID = UUID(),
@@ -63,7 +65,8 @@ public struct Conversation: Codable, Sendable, Identifiable, Equatable {
         updatedAt: Date = Date(),
         lastMessageAt: Date? = nil,
         lastMessagePreview: String? = nil,
-        isArchived: Bool = false
+        isArchived: Bool = false,
+        groupKeyVersion: Int = 1
     ) {
         self.id = id
         self.type = type
@@ -75,6 +78,7 @@ public struct Conversation: Codable, Sendable, Identifiable, Equatable {
         self.lastMessageAt = lastMessageAt
         self.lastMessagePreview = lastMessagePreview
         self.isArchived = isArchived
+        self.groupKeyVersion = groupKeyVersion
     }
 
     /// Display title — for DMs, derive from the other participant's name
@@ -97,5 +101,6 @@ public struct Conversation: Codable, Sendable, Identifiable, Equatable {
         case lastMessageAt = "last_message_at"
         case lastMessagePreview = "last_message_preview"
         case isArchived = "is_archived"
+        case groupKeyVersion = "group_key_version"
     }
 }

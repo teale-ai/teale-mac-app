@@ -179,7 +179,7 @@ final class CompanionAppState {
             // Initialize ChatKit after auth
             if let user = manager.currentUser {
                 currentUserID = user.id
-                let service = ChatService(config: config, currentUserID: user.id)
+                let service = ChatService(currentUserID: user.id, localNodeID: UUID().uuidString)
                 // Wire inference for AI agent responses
                 service.aiParticipant.onInferenceRequest = { [weak self] request in
                     guard let self else {

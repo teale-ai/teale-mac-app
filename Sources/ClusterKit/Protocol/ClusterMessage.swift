@@ -31,6 +31,49 @@ public enum ClusterMessage: Codable, Sendable {
     // Credit transfer
     case creditTransferRequest(CreditTransferPayload)
     case creditTransferConfirm(CreditTransferConfirmPayload)
+
+    // Group E2E encrypted chat
+    case groupKeyExchange(GroupKeyExchangeTransportPayload)
+    case groupMessage(GroupMessageTransportPayload)
+    case groupSyncRequest(GroupSyncRequestTransportPayload)
+    case groupSyncResponse(GroupSyncResponseTransportPayload)
+    case groupConfigUpdate(GroupConfigUpdateTransportPayload)
+}
+
+// MARK: - Group Key Exchange Payload (transport wrapper)
+
+public struct GroupKeyExchangeTransportPayload: Codable, Sendable {
+    public var data: Data
+    public var senderNodeID: String
+
+    public init(data: Data, senderNodeID: String) {
+        self.data = data
+        self.senderNodeID = senderNodeID
+    }
+}
+
+/// P2P group chat message (encrypted payload).
+public struct GroupMessageTransportPayload: Codable, Sendable {
+    public var data: Data // JSON-encoded StoredMessage
+    public init(data: Data) { self.data = data }
+}
+
+/// Sync request: peer sends their vector clock to catch up.
+public struct GroupSyncRequestTransportPayload: Codable, Sendable {
+    public var data: Data // JSON-encoded GroupSyncRequestPayload
+    public init(data: Data) { self.data = data }
+}
+
+/// Sync response: batch of missed messages.
+public struct GroupSyncResponseTransportPayload: Codable, Sendable {
+    public var data: Data // JSON-encoded GroupSyncResponsePayload
+    public init(data: Data) { self.data = data }
+}
+
+/// Group config update (admin-signed MD files).
+public struct GroupConfigUpdateTransportPayload: Codable, Sendable {
+    public var data: Data // JSON-encoded GroupConfigUpdatePayload
+    public init(data: Data) { self.data = data }
 }
 
 // MARK: - Agent Transport Payload

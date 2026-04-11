@@ -1,77 +1,37 @@
 import Foundation
-import Supabase
-import Realtime
 
-// MARK: - Realtime Service
+// MARK: - P2P Message Listener
 
-/// Manages Supabase Realtime channel subscriptions for live message delivery.
-public actor RealtimeService {
-    private let client: SupabaseClient
-    private var messageChannels: [UUID: RealtimeChannelV2] = [:]
+/// Replaces Supabase Realtime with a callback-based P2P message listener.
+/// The transport layer (ClusterKit/WANKit) delivers incoming messages
+/// and this service routes them to the appropriate handler.
+public actor P2PMessageListener {
+    private var messageHandlers: [UUID: @Sendable (StoredMessage) async -> Void] = [:]
 
-    init(client: SupabaseClient) {
-        self.client = client
-    }
+    public init() {}
 
-    // MARK: - Message Subscriptions
-
-    /// Subscribe to new messages in a conversation
-    func subscribeToMessages(
+    /// Subscribe to messages for a specific conversation.
+    public func subscribe(
         conversationID: UUID,
-        onMessage: @escaping @Sendable (Message) -> Void
-    ) async {
-        // Remove existing subscription if any
-        await unsubscribeFromMessages(conversationID: conversationID)
+        handler: @escaping @Sendable (StoredMessage) async -> Void
+    ) {
+        messageHandlers[conversationID] = handler
+    }
 
-        let channel = client.realtimeV2.channel("messages:\(conversationID.uuidString)")
+    /// Unsubscribe from a conversation.
+    public func unsubscribe(conversationID: UUID) {
+        messageHandlers.removeValue(forKey: conversationID)
+    }
 
-        let changes = channel.postgresChange(
-            InsertAction.self,
-            schema: "public",
-            table: "messages",
-            filter: "conversation_id=eq.\(conversationID.uuidString)"
-        )
-
-        await channel.subscribe()
-
-        messageChannels[conversationID] = channel
-
-        // Listen for inserts in background
-        Task {
-            for await insert in changes {
-                do {
-                    let message = try insert.decodeRecord(as: Message.self, decoder: JSONDecoder.supabaseDecoder)
-                    onMessage(message)
-                } catch {
-                    // Failed to decode message — skip
-                }
-            }
+    /// Route an incoming message to the appropriate handler.
+    public func deliver(_ message: StoredMessage) async {
+        if let handler = messageHandlers[message.conversationID] {
+            await handler(message)
         }
     }
 
-    /// Unsubscribe from a conversation's messages
-    func unsubscribeFromMessages(conversationID: UUID) async {
-        if let channel = messageChannels.removeValue(forKey: conversationID) {
-            await channel.unsubscribe()
-        }
+    /// Remove all subscriptions.
+    public func removeAllSubscriptions() {
+        messageHandlers.removeAll()
     }
-
-    /// Remove all subscriptions
-    func removeAllSubscriptions() async {
-        for (_, channel) in messageChannels {
-            await channel.unsubscribe()
-        }
-        messageChannels.removeAll()
-    }
-}
-
-// MARK: - JSON Decoder for Supabase
-
-private extension JSONDecoder {
-    static let supabaseDecoder: JSONDecoder = {
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
-    }()
 }

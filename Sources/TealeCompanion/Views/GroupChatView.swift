@@ -178,7 +178,7 @@ struct GroupChatView: View {
 // MARK: - Group Message Bubble
 
 private struct GroupMessageBubble: View {
-    let message: Message
+    let message: DecryptedMessage
     let participants: [ParticipantInfo]
     let isGroup: Bool
 

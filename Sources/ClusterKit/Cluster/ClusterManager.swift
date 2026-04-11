@@ -355,6 +355,10 @@ public final class ClusterManager: @unchecked Sendable {
         case .creditTransferConfirm:
             // Confirmation received — informational only (sender already debited)
             break
+
+        case .groupKeyExchange, .groupMessage, .groupSyncRequest, .groupSyncResponse, .groupConfigUpdate:
+            // Handled by ChatKit's P2P messaging layer
+            break
         }
     }
 

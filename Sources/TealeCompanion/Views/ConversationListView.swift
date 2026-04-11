@@ -40,15 +40,7 @@ struct ConversationListView: View {
 
                 // Group chats / DMs
                 if let chatService = appState.chatService {
-                    if chatService.isLoadingConversations {
-                        HStack {
-                            Spacer()
-                            ProgressView()
-                                .controlSize(.small)
-                            Spacer()
-                        }
-                        .listRowSeparator(.hidden)
-                    } else if filteredConversations.isEmpty && !searchText.isEmpty {
+                    if filteredConversations.isEmpty && !searchText.isEmpty {
                         Text("No conversations found")
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity)

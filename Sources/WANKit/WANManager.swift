@@ -355,7 +355,28 @@ public final class WANManager: @unchecked Sendable {
         connectedPeers.values.first { $0.peerInfo.hasModel(modelID) }
     }
 
-    func connectedPeerForInference(preferredModel modelID: String?) -> ConnectedWANPeer? {
+    func connectedPeerForInference(preferredModel modelID: String?, groupID: String? = nil) -> ConnectedWANPeer? {
+        // If a groupID is specified, try group peers first (group-first routing)
+        if let groupID {
+            let groupPeers = connectedPeers.values.filter { $0.peerInfo.organizationID == groupID }
+            let groupMatch: ConnectedWANPeer?
+            if let modelID {
+                groupMatch = groupPeers.first { $0.peerInfo.hasModel(modelID) }
+            } else {
+                groupMatch = groupPeers
+                    .filter { !$0.peerInfo.capabilities.loadedModels.isEmpty }
+                    .sorted { lhs, rhs in
+                        if lhs.latencyMs != rhs.latencyMs {
+                            return (lhs.latencyMs ?? .infinity) < (rhs.latencyMs ?? .infinity)
+                        }
+                        return lhs.peerInfo.capabilities.hardware.totalRAMGB > rhs.peerInfo.capabilities.hardware.totalRAMGB
+                    }
+                    .first
+            }
+            if let peer = groupMatch { return peer }
+        }
+
+        // Fall back to any peer
         if let modelID {
             return connectedPeer(withModel: modelID)
         }

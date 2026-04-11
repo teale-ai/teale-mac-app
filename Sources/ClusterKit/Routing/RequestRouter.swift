@@ -8,7 +8,8 @@ public struct RequestRouter: Sendable {
 
     public init() {}
 
-    /// Decide where to route a request
+    /// Decide where to route a request.
+    /// Uses `request.groupID` as the org preference for group-first routing.
     public func route(
         request: ChatCompletionRequest,
         clusterManager: ClusterManager,
@@ -18,7 +19,7 @@ public struct RequestRouter: Sendable {
             request: request,
             clusterManager: clusterManager,
             localModelLoaded: localModelLoaded,
-            requestOrganizationID: nil,
+            requestOrganizationID: request.groupID,
             isExternalRequest: false
         )
     }
