@@ -3,10 +3,10 @@ import Foundation
 // MARK: - Persisted Ledger Data
 
 struct LedgerData: Codable, Sendable {
-    var transactions: [CreditTransaction]
-    var currentBalance: CreditAmount
-    var totalEarned: CreditAmount
-    var totalSpent: CreditAmount
+    var transactions: [USDCTransaction]
+    var currentBalance: USDCAmount
+    var totalEarned: USDCAmount
+    var totalSpent: USDCAmount
 
     init() {
         transactions = []
@@ -16,22 +16,22 @@ struct LedgerData: Codable, Sendable {
     }
 }
 
-// MARK: - CreditLedger
+// MARK: - USDCLedger
 
-/// Actor that maintains the local credit ledger with JSON file persistence.
-public actor CreditLedger {
+/// Actor that maintains the local USDC ledger with JSON file persistence.
+public actor USDCLedger {
     private var data: LedgerData
     private let fileURL: URL
     private var isNewLedger: Bool
 
     /// Initialize the ledger, loading from disk if available or creating a new one with a welcome bonus.
     public init(directoryURL: URL? = nil) async {
-        let directory = directoryURL ?? CreditLedger.defaultDirectory()
+        let directory = directoryURL ?? USDCLedger.defaultDirectory()
         let url = directory.appendingPathComponent("credits.json")
         self.fileURL = url
 
         // Try to load existing data
-        if let loaded = CreditLedger.loadFromDisk(url: url) {
+        if let loaded = USDCLedger.loadFromDisk(url: url) {
             self.data = loaded
             self.isNewLedger = false
         } else {
@@ -45,18 +45,18 @@ public actor CreditLedger {
         guard isNewLedger else { return }
         isNewLedger = false
 
-        let transaction = CreditTransaction(
+        let transaction = USDCTransaction(
             type: .bonus,
-            amount: CreditPricing.welcomeBonus,
+            amount: InferencePricing.welcomeBonus,
             description: "Welcome bonus for joining the network"
         )
-        data.currentBalance += CreditPricing.welcomeBonus
+        data.currentBalance += InferencePricing.welcomeBonus
         data.transactions.append(transaction)
         save()
     }
 
     /// Credit (add) an amount to the ledger.
-    public func credit(amount: CreditAmount, transaction: CreditTransaction) {
+    public func credit(amount: USDCAmount, transaction: USDCTransaction) {
         data.currentBalance += amount
         data.totalEarned += amount
         data.transactions.append(transaction)
@@ -64,7 +64,7 @@ public actor CreditLedger {
     }
 
     /// Debit (subtract) an amount from the ledger.
-    public func debit(amount: CreditAmount, transaction: CreditTransaction) {
+    public func debit(amount: USDCAmount, transaction: USDCTransaction) {
         data.currentBalance -= amount
         data.totalSpent += amount
         data.transactions.append(transaction)
@@ -82,7 +82,7 @@ public actor CreditLedger {
     }
 
     /// Get transaction history, most recent first.
-    public func getHistory(limit: Int = 50, offset: Int = 0) -> [CreditTransaction] {
+    public func getHistory(limit: Int = 50, offset: Int = 0) -> [USDCTransaction] {
         let sorted = data.transactions.sorted { $0.timestamp > $1.timestamp }
         let start = min(offset, sorted.count)
         let end = min(start + limit, sorted.count)
@@ -90,7 +90,7 @@ public actor CreditLedger {
     }
 
     /// Get all transactions (for analytics).
-    public func getAllTransactions() -> [CreditTransaction] {
+    public func getAllTransactions() -> [USDCTransaction] {
         data.transactions
     }
 

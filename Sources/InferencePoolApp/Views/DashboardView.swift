@@ -362,13 +362,13 @@ private struct CreditBalanceSection: View {
 
             HStack(spacing: 12) {
                 InfoPill(
-                    icon: "creditcard",
-                    text: String(format: "%.1f credits", appState.wallet.balance.value),
-                    color: appState.wallet.balance.value > 10 ? .green : .orange
+                    icon: "dollarsign.circle",
+                    text: appState.wallet.balance.description + " USDC",
+                    color: appState.wallet.balance.value > 0.001 ? .green : .orange
                 )
                 InfoPill(
                     icon: "arrow.down.circle",
-                    text: String(format: "+%.1f earned", appState.wallet.totalEarned.value),
+                    text: "+" + appState.wallet.totalEarned.description + " earned",
                     color: .green
                 )
             }

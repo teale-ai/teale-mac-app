@@ -59,20 +59,20 @@ public actor AgentNegotiator {
         }
 
         // Check rule's max credit spend
-        if offer.creditCost > rule.maxCreditSpend {
+        if offer.creditCost > rule.maxSpend {
             // Try counter-offer at the max allowed
-            if rule.maxCreditSpend > 0 {
+            if rule.maxSpend > 0 {
                 let counter = OfferPayload(
                     intentID: offer.intentID,
                     description: offer.description,
-                    creditCost: rule.maxCreditSpend,
+                    creditCost: rule.maxSpend,
                     estimatedDuration: offer.estimatedDuration,
                     terms: offer.terms,
                     validUntil: offer.validUntil
                 )
                 return .counterOffer(counter)
             }
-            return .autoReject(reason: "Cost \(offer.creditCost) exceeds delegation rule limit of \(rule.maxCreditSpend)")
+            return .autoReject(reason: "Cost \(offer.creditCost) exceeds delegation rule limit of \(rule.maxSpend)")
         }
 
         // Check allowed agent types

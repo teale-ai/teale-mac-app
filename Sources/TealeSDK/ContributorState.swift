@@ -19,7 +19,7 @@ public struct ContributionInfo: Sendable {
     public var connectedPeers: Int
     public var requestsServed: Int
     public var tokensGenerated: Int
-    public var creditsEarned: CreditAmount
+    public var creditsEarned: USDCAmount
     public var currentModel: String?
     public var uptime: TimeInterval
 
@@ -27,7 +27,7 @@ public struct ContributionInfo: Sendable {
         connectedPeers: Int = 0,
         requestsServed: Int = 0,
         tokensGenerated: Int = 0,
-        creditsEarned: CreditAmount = .zero,
+        creditsEarned: USDCAmount = .zero,
         currentModel: String? = nil,
         uptime: TimeInterval = 0
     ) {
@@ -43,14 +43,14 @@ public struct ContributionInfo: Sendable {
 // MARK: - Contribution Earnings
 
 public struct ContributionEarnings: Sendable {
-    public var totalCredits: CreditAmount
-    public var todayCredits: CreditAmount
+    public var totalCredits: USDCAmount
+    public var todayCredits: USDCAmount
     public var requestsServed: Int
     public var tokensGenerated: Int
 
     public init(
-        totalCredits: CreditAmount = .zero,
-        todayCredits: CreditAmount = .zero,
+        totalCredits: USDCAmount = .zero,
+        todayCredits: USDCAmount = .zero,
         requestsServed: Int = 0,
         tokensGenerated: Int = 0
     ) {

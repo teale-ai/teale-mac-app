@@ -1,10 +1,10 @@
 import Foundation
 import SharedTypes
 
-// MARK: - CreditAmount
+// MARK: - USDCAmount
 
-/// A wrapper around Double representing a credit balance or amount.
-public struct CreditAmount: Codable, Sendable, Hashable, CustomStringConvertible {
+/// A wrapper around Double representing a USDC balance or amount.
+public struct USDCAmount: Codable, Sendable, Hashable, CustomStringConvertible {
     public var value: Double
 
     public init(_ value: Double) {
@@ -12,34 +12,36 @@ public struct CreditAmount: Codable, Sendable, Hashable, CustomStringConvertible
     }
 
     public var description: String {
-        String(format: "%.2f credits", value)
+        if value == 0 { return "$0.00" }
+        if value < 0.01 { return String(format: "$%.6f", value) }
+        return String(format: "$%.2f", value)
     }
 
-    public static func + (lhs: CreditAmount, rhs: CreditAmount) -> CreditAmount {
-        CreditAmount(lhs.value + rhs.value)
+    public static func + (lhs: USDCAmount, rhs: USDCAmount) -> USDCAmount {
+        USDCAmount(lhs.value + rhs.value)
     }
 
-    public static func - (lhs: CreditAmount, rhs: CreditAmount) -> CreditAmount {
-        CreditAmount(lhs.value - rhs.value)
+    public static func - (lhs: USDCAmount, rhs: USDCAmount) -> USDCAmount {
+        USDCAmount(lhs.value - rhs.value)
     }
 
-    public static func * (lhs: CreditAmount, rhs: Double) -> CreditAmount {
-        CreditAmount(lhs.value * rhs)
+    public static func * (lhs: USDCAmount, rhs: Double) -> USDCAmount {
+        USDCAmount(lhs.value * rhs)
     }
 
-    public static func += (lhs: inout CreditAmount, rhs: CreditAmount) {
+    public static func += (lhs: inout USDCAmount, rhs: USDCAmount) {
         lhs.value += rhs.value
     }
 
-    public static func -= (lhs: inout CreditAmount, rhs: CreditAmount) {
+    public static func -= (lhs: inout USDCAmount, rhs: USDCAmount) {
         lhs.value -= rhs.value
     }
 
-    public static let zero = CreditAmount(0)
+    public static let zero = USDCAmount(0)
 }
 
-extension CreditAmount: Comparable {
-    public static func < (lhs: CreditAmount, rhs: CreditAmount) -> Bool {
+extension USDCAmount: Comparable {
+    public static func < (lhs: USDCAmount, rhs: USDCAmount) -> Bool {
         lhs.value < rhs.value
     }
 }
@@ -53,17 +55,15 @@ public enum TransactionType: String, Codable, Sendable {
     case adjustment
     case transfer
     case sdkEarning    // Earned via TealeSDK contribution (attributed to developer wallet)
-    case deposit      // USDC deposit converted to credits
-    case withdrawal   // Credits converted to USDC withdrawal
 }
 
-// MARK: - CreditTransaction
+// MARK: - USDCTransaction
 
-public struct CreditTransaction: Codable, Sendable, Identifiable {
+public struct USDCTransaction: Codable, Sendable, Identifiable {
     public var id: UUID
     public var timestamp: Date
     public var type: TransactionType
-    public var amount: CreditAmount
+    public var amount: USDCAmount
     public var description: String
     public var peerNodeID: String?
     public var modelID: String?
@@ -74,7 +74,7 @@ public struct CreditTransaction: Codable, Sendable, Identifiable {
         id: UUID = UUID(),
         timestamp: Date = Date(),
         type: TransactionType,
-        amount: CreditAmount,
+        amount: USDCAmount,
         description: String,
         peerNodeID: String? = nil,
         modelID: String? = nil,
@@ -93,9 +93,9 @@ public struct CreditTransaction: Codable, Sendable, Identifiable {
     }
 }
 
-// MARK: - CreditPricing
+// MARK: - InferencePricing
 
-public struct CreditPricing: Sendable {
+public struct InferencePricing: Sendable {
 
     /// Credits per 1K tokens based on model parameter count string (e.g. "1B", "8B").
     public static func modelComplexityFactor(parameterCount: String) -> Double {
@@ -119,49 +119,49 @@ public struct CreditPricing: Sendable {
         }
     }
 
-    /// Calculate the credit cost for a given number of tokens on a specific model.
-    public static func cost(tokenCount: Int, parameterCount: String, quantization: QuantizationType) -> CreditAmount {
+    /// Calculate the USDC cost for a given number of tokens on a specific model.
+    public static func cost(tokenCount: Int, parameterCount: String, quantization: QuantizationType) -> USDCAmount {
         let complexity = modelComplexityFactor(parameterCount: parameterCount)
         let quantMult = quantizationMultiplier(quantization)
-        let cost = (Double(tokenCount) / 1000.0) * complexity * quantMult
-        return CreditAmount(cost)
+        let cost = (Double(tokenCount) / 1000.0) * complexity * quantMult / 10_000.0
+        return USDCAmount(cost)
     }
 
-    /// Calculate the credit cost using a ModelDescriptor.
-    public static func cost(tokenCount: Int, model: ModelDescriptor) -> CreditAmount {
+    /// Calculate the USDC cost using a ModelDescriptor.
+    public static func cost(tokenCount: Int, model: ModelDescriptor) -> USDCAmount {
         cost(tokenCount: tokenCount, parameterCount: model.parameterCount, quantization: model.quantization)
     }
 
     /// The earning rate is 95% of the cost (5% network fee).
-    public static func earning(tokenCount: Int, parameterCount: String, quantization: QuantizationType) -> CreditAmount {
+    public static func earning(tokenCount: Int, parameterCount: String, quantization: QuantizationType) -> USDCAmount {
         let totalCost = cost(tokenCount: tokenCount, parameterCount: parameterCount, quantization: quantization)
         return totalCost * 0.95
     }
 
     /// The earning rate using a ModelDescriptor.
-    public static func earning(tokenCount: Int, model: ModelDescriptor) -> CreditAmount {
+    public static func earning(tokenCount: Int, model: ModelDescriptor) -> USDCAmount {
         earning(tokenCount: tokenCount, parameterCount: model.parameterCount, quantization: model.quantization)
     }
 
     /// The welcome bonus for new users.
-    public static let welcomeBonus = CreditAmount(100.0)
+    public static let welcomeBonus = USDCAmount(0.01)
 
     /// Minimum balance required to make remote inference requests.
-    public static let minimumBalanceForRemote = CreditAmount(1.0)
+    public static let minimumBalanceForRemote = USDCAmount(0.0001)
 }
 
 // MARK: - WalletBalance
 
 public struct WalletBalance: Codable, Sendable {
-    public var currentBalance: CreditAmount
-    public var totalEarned: CreditAmount
-    public var totalSpent: CreditAmount
+    public var currentBalance: USDCAmount
+    public var totalEarned: USDCAmount
+    public var totalSpent: USDCAmount
     public var transactionCount: Int
 
     public init(
-        currentBalance: CreditAmount = .zero,
-        totalEarned: CreditAmount = .zero,
-        totalSpent: CreditAmount = .zero,
+        currentBalance: USDCAmount = .zero,
+        totalEarned: USDCAmount = .zero,
+        totalSpent: USDCAmount = .zero,
         transactionCount: Int = 0
     ) {
         self.currentBalance = currentBalance

@@ -42,7 +42,7 @@ public actor AgentManager {
     public let router: AgentRouter
 
     private var profile: AgentProfile?
-    private var creditBalance: Double = 0
+    private var balance: Double = 0
 
     public init(
         conversationStore: ConversationStore? = nil,
@@ -58,9 +58,9 @@ public actor AgentManager {
 
     // MARK: - Setup
 
-    public func setup(profile: AgentProfile, creditBalance: Double = 0) async {
+    public func setup(profile: AgentProfile, creditBalance balance: Double = 0) async {
         self.profile = profile
-        self.creditBalance = creditBalance
+        self.balance = balance
 
         // Register ourselves in the directory
         await directory.register(profile: profile, source: .local)
@@ -76,8 +76,8 @@ public actor AgentManager {
         try? await directory.load()
     }
 
-    public func updateCreditBalance(_ balance: Double) {
-        self.creditBalance = balance
+    public func updateBalance(_ newBalance: Double) {
+        self.balance = newBalance
     }
 
     public func getProfile() -> AgentProfile? {
@@ -158,8 +158,8 @@ public actor AgentManager {
             throw AgentError.offerExpired
         }
 
-        if offer.creditCost > creditBalance {
-            throw AgentError.insufficientCredits(required: offer.creditCost, available: creditBalance)
+        if offer.creditCost > balance {
+            throw AgentError.insufficientCredits(required: offer.creditCost, available: balance)
         }
 
         let toAgentID = convo.participants.first { $0 != profile.nodeID } ?? ""
@@ -296,7 +296,7 @@ public actor AgentManager {
                 rules: profile.preferences.delegationRules,
                 preferences: profile.preferences,
                 senderProfile: senderEntry,
-                creditBalance: creditBalance
+                creditBalance: balance
             )
 
             switch decision {

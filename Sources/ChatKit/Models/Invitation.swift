@@ -22,7 +22,7 @@ public struct Invitation: Codable, Sendable, Identifiable, Equatable {
     public var maxUses: Int
     public var currentUses: Int
     /// Credits awarded to inviter per accepted invite
-    public var creditsReward: Double
+    public var reward: Double
     public var expiresAt: Date
     public var createdAt: Date
 
@@ -43,7 +43,7 @@ public struct Invitation: Codable, Sendable, Identifiable, Equatable {
         inviteType: InvitationType,
         maxUses: Int = 1,
         currentUses: Int = 0,
-        creditsReward: Double = 25.0,
+        reward: Double = 25.0,
         expiresAt: Date = Date().addingTimeInterval(7 * 24 * 3600),
         createdAt: Date = Date()
     ) {
@@ -54,7 +54,7 @@ public struct Invitation: Codable, Sendable, Identifiable, Equatable {
         self.inviteType = inviteType
         self.maxUses = maxUses
         self.currentUses = currentUses
-        self.creditsReward = creditsReward
+        self.reward = reward
         self.expiresAt = expiresAt
         self.createdAt = createdAt
     }
@@ -74,7 +74,7 @@ public struct Invitation: Codable, Sendable, Identifiable, Equatable {
         case inviteType = "invite_type"
         case maxUses = "max_uses"
         case currentUses = "current_uses"
-        case creditsReward = "credits_reward"
+        case reward = "credits_reward"
         case expiresAt = "expires_at"
         case createdAt = "created_at"
     }

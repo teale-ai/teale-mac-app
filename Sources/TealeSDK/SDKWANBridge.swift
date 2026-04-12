@@ -11,7 +11,7 @@ import ClusterKit
 actor SDKWANBridge {
     private let wanManager: WANManager
     private let inferenceProvider: any InferenceProvider
-    private let wallet: CreditWallet
+    private let wallet: USDCWallet
     private let resourceGovernor: ResourceGovernor
     private let earningsReporter: EarningsReporter
     private var currentModel: ModelDescriptor?
@@ -22,7 +22,7 @@ actor SDKWANBridge {
     init(
         wanManager: WANManager,
         inferenceProvider: any InferenceProvider,
-        wallet: CreditWallet,
+        wallet: USDCWallet,
         resourceGovernor: ResourceGovernor,
         earningsReporter: EarningsReporter
     ) {
@@ -113,7 +113,7 @@ actor SDKWANBridge {
                     requestID: payload.requestID,
                     tokensGenerated: tokenCount,
                     modelID: model.id,
-                    creditsEarned: CreditPricing.earning(tokenCount: tokenCount, model: model),
+                    creditsEarned: InferencePricing.earning(tokenCount: tokenCount, model: model),
                     peerNodeID: nil
                 )
             }

@@ -1,25 +1,25 @@
 import Foundation
 import SharedTypes
 
-// MARK: - CreditWallet
+// MARK: - USDCWallet
 
-/// Observable wrapper around CreditLedger for SwiftUI binding.
+/// Observable wrapper around USDCLedger for SwiftUI binding.
 @Observable
-public final class CreditWallet: @unchecked Sendable {
-    public private(set) var balance: CreditAmount = .zero
-    public private(set) var recentTransactions: [CreditTransaction] = []
-    public private(set) var totalEarned: CreditAmount = .zero
-    public private(set) var totalSpent: CreditAmount = .zero
+public final class USDCWallet: @unchecked Sendable {
+    public private(set) var balance: USDCAmount = .zero
+    public private(set) var recentTransactions: [USDCTransaction] = []
+    public private(set) var totalEarned: USDCAmount = .zero
+    public private(set) var totalSpent: USDCAmount = .zero
 
-    private var ledger: CreditLedger?
+    private var ledger: USDCLedger?
 
-    public init(ledger: CreditLedger) {
+    public init(ledger: USDCLedger) {
         self.ledger = ledger
     }
 
     /// Create a placeholder wallet (no ledger) for use before async init completes
-    public static func placeholder() -> CreditWallet {
-        let wallet = CreditWallet()
+    public static func placeholder() -> USDCWallet {
+        let wallet = USDCWallet()
         return wallet
     }
 
@@ -30,8 +30,8 @@ public final class CreditWallet: @unchecked Sendable {
     /// Record an earning (we served inference for a peer).
     public func recordEarning(tokens: Int, model: ModelDescriptor, peer: String? = nil) async {
         guard let ledger = ledger else { return }
-        let amount = CreditPricing.earning(tokenCount: tokens, model: model)
-        let transaction = CreditTransaction(
+        let amount = InferencePricing.earning(tokenCount: tokens, model: model)
+        let transaction = USDCTransaction(
             type: .earned,
             amount: amount,
             description: "Served \(tokens) tokens of \(model.name)",
@@ -46,8 +46,8 @@ public final class CreditWallet: @unchecked Sendable {
     /// Record spending (we consumed inference from a peer).
     public func recordSpending(tokens: Int, model: ModelDescriptor, peer: String? = nil) async {
         guard let ledger = ledger else { return }
-        let amount = CreditPricing.cost(tokenCount: tokens, model: model)
-        let transaction = CreditTransaction(
+        let amount = InferencePricing.cost(tokenCount: tokens, model: model)
+        let transaction = USDCTransaction(
             type: .spent,
             amount: amount,
             description: "Used \(tokens) tokens of \(model.name)",
@@ -60,14 +60,14 @@ public final class CreditWallet: @unchecked Sendable {
     }
 
     public func recordTransferDebit(
-        amount: CreditAmount,
+        amount: USDCAmount,
         toPeer peerNodeID: String,
         description: String,
         modelID: String? = nil,
         tokenCount: Int? = nil
     ) async {
         guard let ledger = ledger else { return }
-        let transaction = CreditTransaction(
+        let transaction = USDCTransaction(
             type: .transfer,
             amount: amount,
             description: description,
@@ -80,14 +80,14 @@ public final class CreditWallet: @unchecked Sendable {
     }
 
     public func recordTransferCredit(
-        amount: CreditAmount,
+        amount: USDCAmount,
         fromPeer peerNodeID: String,
         description: String,
         modelID: String? = nil,
         tokenCount: Int? = nil
     ) async {
         guard let ledger = ledger else { return }
-        let transaction = CreditTransaction(
+        let transaction = USDCTransaction(
             type: .transfer,
             amount: amount,
             description: description,
@@ -100,14 +100,14 @@ public final class CreditWallet: @unchecked Sendable {
     }
 
     public func recordAdjustmentCredit(
-        amount: CreditAmount,
+        amount: USDCAmount,
         description: String,
         peerNodeID: String? = nil,
         modelID: String? = nil,
         tokenCount: Int? = nil
     ) async {
         guard let ledger = ledger else { return }
-        let transaction = CreditTransaction(
+        let transaction = USDCTransaction(
             type: .adjustment,
             amount: amount,
             description: description,
@@ -120,14 +120,14 @@ public final class CreditWallet: @unchecked Sendable {
     }
 
     public func recordAdjustmentDebit(
-        amount: CreditAmount,
+        amount: USDCAmount,
         description: String,
         peerNodeID: String? = nil,
         modelID: String? = nil,
         tokenCount: Int? = nil
     ) async {
         guard let ledger = ledger else { return }
-        let transaction = CreditTransaction(
+        let transaction = USDCTransaction(
             type: .adjustment,
             amount: amount,
             description: description,
@@ -139,29 +139,29 @@ public final class CreditWallet: @unchecked Sendable {
         await refreshBalance()
     }
 
-    /// Debit wallet for an outgoing P2P credit transfer. Returns true if balance was sufficient.
+    /// Debit wallet for an outgoing P2P USDC transfer. Returns true if balance was sufficient.
     public func sendTransfer(amount: Double, toPeer peerNodeID: String, memo: String? = nil) async -> Bool {
         guard let ledger = ledger else { return false }
-        let creditAmount = CreditAmount(amount)
+        let usdcAmount = USDCAmount(amount)
         let currentBal = await ledger.getBalance().currentBalance
-        guard currentBal >= creditAmount else { return false }
+        guard currentBal >= usdcAmount else { return false }
 
-        let desc = memo.map { "Sent \(String(format: "%.2f", amount)) credits: \($0)" }
-            ?? "Sent \(String(format: "%.2f", amount)) credits"
-        await recordTransferDebit(amount: creditAmount, toPeer: peerNodeID, description: desc)
+        let desc = memo.map { "Sent \(String(format: "%.2f", amount)) USDC: \($0)" }
+            ?? "Sent \(String(format: "%.2f", amount)) USDC"
+        await recordTransferDebit(amount: usdcAmount, toPeer: peerNodeID, description: desc)
         return true
     }
 
-    /// Credit wallet for an incoming P2P credit transfer.
+    /// Credit wallet for an incoming P2P USDC transfer.
     public func receiveTransfer(amount: Double, fromPeer peerNodeID: String, memo: String? = nil) async {
-        let creditAmount = CreditAmount(amount)
-        let desc = memo.map { "Received \(String(format: "%.2f", amount)) credits: \($0)" }
-            ?? "Received \(String(format: "%.2f", amount)) credits"
-        await recordTransferCredit(amount: creditAmount, fromPeer: peerNodeID, description: desc)
+        let usdcAmount = USDCAmount(amount)
+        let desc = memo.map { "Received \(String(format: "%.2f", amount)) USDC: \($0)" }
+            ?? "Received \(String(format: "%.2f", amount)) USDC"
+        await recordTransferCredit(amount: usdcAmount, fromPeer: peerNodeID, description: desc)
     }
 
     /// Get current balance asynchronously (safe from any context).
-    public func currentBalance() async -> CreditAmount {
+    public func currentBalance() async -> USDCAmount {
         guard let ledger = ledger else { return .zero }
         return await ledger.getBalance().currentBalance
     }

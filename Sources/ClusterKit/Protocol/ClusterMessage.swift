@@ -28,9 +28,9 @@ public enum ClusterMessage: Codable, Sendable {
     // Agent protocol
     case agentMessage(AgentTransportPayload)
 
-    // Credit transfer
-    case creditTransferRequest(CreditTransferPayload)
-    case creditTransferConfirm(CreditTransferConfirmPayload)
+    // USDC transfer
+    case usdcTransferRequest(USDCTransferPayload)
+    case usdcTransferConfirm(USDCTransferConfirmPayload)
 
     // Group E2E encrypted chat
     case groupKeyExchange(GroupKeyExchangeTransportPayload)
@@ -246,9 +246,9 @@ public struct ModelTransferCompletePayload: Codable, Sendable {
     }
 }
 
-// MARK: - Credit Transfer Payloads
+// MARK: - USDC Transfer Payloads
 
-public struct CreditTransferPayload: Codable, Sendable {
+public struct USDCTransferPayload: Codable, Sendable {
     public var transferID: UUID
     public var senderNodeID: String
     public var senderDeviceName: String?
@@ -276,7 +276,7 @@ public struct CreditTransferPayload: Codable, Sendable {
     }
 }
 
-public struct CreditTransferConfirmPayload: Codable, Sendable {
+public struct USDCTransferConfirmPayload: Codable, Sendable {
     public var transferID: UUID
     public var receiverNodeID: String
     public var accepted: Bool

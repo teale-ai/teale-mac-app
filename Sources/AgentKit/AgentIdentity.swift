@@ -116,13 +116,13 @@ public struct AvailabilitySchedule: Codable, Sendable, Equatable {
 
 public struct DelegationRule: Codable, Sendable, Equatable {
     public var capability: String
-    public var maxCreditSpend: Double
+    public var maxSpend: Double
     public var requiresApproval: Bool
     public var allowedAgentTypes: [AgentType]
 
-    public init(capability: String, maxCreditSpend: Double, requiresApproval: Bool = false, allowedAgentTypes: [AgentType] = AgentType.allCases) {
+    public init(capability: String, maxSpend: Double, requiresApproval: Bool = false, allowedAgentTypes: [AgentType] = AgentType.allCases) {
         self.capability = capability
-        self.maxCreditSpend = maxCreditSpend
+        self.maxSpend = maxSpend
         self.requiresApproval = requiresApproval
         self.allowedAgentTypes = allowedAgentTypes
     }

@@ -36,7 +36,7 @@ public actor EarningsReporter {
         requestID: UUID,
         tokensGenerated: Int,
         modelID: String,
-        creditsEarned: CreditAmount,
+        creditsEarned: USDCAmount,
         peerNodeID: String?
     ) async {
         let report = EarningReport(

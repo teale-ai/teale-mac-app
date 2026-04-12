@@ -46,7 +46,7 @@ public final class ClusterManager: @unchecked Sendable {
 
     // Callbacks
     public var onInferenceRequest: ((InferenceRequestPayload, PeerInfo) async -> Void)?
-    public var onCreditTransferReceived: ((CreditTransferPayload, PeerInfo) async -> Void)?
+    public var onCreditTransferReceived: ((USDCTransferPayload, PeerInfo) async -> Void)?
 
     public init(localDeviceInfo: DeviceInfo) {
         self.localDeviceInfo = localDeviceInfo
@@ -354,10 +354,10 @@ public final class ClusterManager: @unchecked Sendable {
             // Handled by AgentKit layer
             break
 
-        case .creditTransferRequest(let payload):
+        case .usdcTransferRequest(let payload):
             await onCreditTransferReceived?(payload, peer)
 
-        case .creditTransferConfirm:
+        case .usdcTransferConfirm:
             // Confirmation received — informational only (sender already debited)
             break
 
@@ -447,11 +447,11 @@ public final class ClusterManager: @unchecked Sendable {
     // MARK: - Credit Transfers
 
     /// Send a credit transfer to a specific peer
-    public func sendCreditTransfer(to peerID: UUID, payload: CreditTransferPayload) async throws {
+    public func sendCreditTransfer(to peerID: UUID, payload: USDCTransferPayload) async throws {
         guard let peer = peers[peerID] else {
             throw ClusterError.routingFailed
         }
-        try await peer.connection.send(.creditTransferRequest(payload))
+        try await peer.connection.send(.usdcTransferRequest(payload))
     }
 
     // MARK: - Model Sharing
