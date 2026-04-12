@@ -3,8 +3,8 @@ import CreditKit
 
 // MARK: - Wallet Bridge
 
-/// Bridges the on-chain Solana USDC wallet to the internal CreditKit credit ledger.
-/// Deposits (USDC → credits) and withdrawals (credits → USDC) flow through here.
+/// Bridges the on-chain Solana USDC wallet to the internal CreditKit USDC ledger.
+/// Deposits and withdrawals flow through here.
 @Observable
 public final class WalletBridge: @unchecked Sendable {
 
@@ -41,7 +41,7 @@ public final class WalletBridge: @unchecked Sendable {
     private let identity: SolanaIdentity
     private let rpc: SolanaRPCService
     private let depositMonitor: DepositMonitor
-    private let creditWallet: CreditWallet
+    private let usdcWallet: USDCWallet
     private let config: WalletKitConfig
 
     /// Previous USDC balance for detecting deposit amounts via balance diff
@@ -51,11 +51,11 @@ public final class WalletBridge: @unchecked Sendable {
 
     public init(
         identity: SolanaIdentity,
-        creditWallet: CreditWallet,
+        creditWallet: USDCWallet,
         config: WalletKitConfig = .devnet
     ) {
         self.identity = identity
-        self.creditWallet = creditWallet
+        self.usdcWallet = creditWallet
         self.config = config
         self.solanaAddress = identity.solanaAddress
         self.rpc = SolanaRPCService(config: config)
@@ -109,18 +109,18 @@ public final class WalletBridge: @unchecked Sendable {
         guard newBalance > oldBalance else { return }
         let depositMicroUSDC = newBalance - oldBalance
 
-        // Convert to credits: microUSDC → USD → credits
-        let creditAmount = CreditAmount.fromMicroUSDC(depositMicroUSDC)
+        // Convert micro-USDC to USD
+        let usdcAmount = USDCAmount(Double(depositMicroUSDC) / 1_000_000.0)
 
-        // Record in the credit ledger
-        let transaction = CreditTransaction(
-            type: .deposit,
-            amount: creditAmount,
+        // Record in the USDC ledger
+        let transaction = USDCTransaction(
+            type: .adjustment,
+            amount: usdcAmount,
             description: String(format: "USDC deposit ($%.4f)", Double(depositMicroUSDC) / 1_000_000.0),
             txSignature: transfer.signature
         )
-        await creditWallet.recordAdjustmentCredit(
-            amount: creditAmount,
+        await usdcWallet.recordAdjustmentCredit(
+            amount: usdcAmount,
             description: transaction.description
         )
 
@@ -141,22 +141,22 @@ public final class WalletBridge: @unchecked Sendable {
 
     // MARK: - Withdrawals
 
-    /// Withdraw credits as USDC to an external Solana address.
+    /// Withdraw USDC to an external Solana address.
     /// Uses optimistic debit: debits the ledger first, then sends on-chain.
     /// On failure, a compensating credit reverses the debit.
     /// - Returns: The Solana transaction signature
-    public func withdraw(creditAmount: CreditAmount, to destinationAddress: String) async throws -> String {
+    public func withdraw(creditAmount: USDCAmount, to destinationAddress: String) async throws -> String {
         guard !pendingWithdrawal else {
             throw WalletKitError.withdrawalInProgress
         }
 
-        // Validate sufficient credit balance
-        let currentBalance = await creditWallet.currentBalance()
+        // Validate sufficient balance
+        let currentBalance = await usdcWallet.currentBalance()
         guard currentBalance >= creditAmount else {
             throw WalletKitError.insufficientCreditBalance
         }
 
-        let microUSDC = creditAmount.microUSDC
+        let microUSDC = UInt64(creditAmount.value * 1_000_000.0)
         guard microUSDC > 0 else {
             throw WalletKitError.insufficientCreditBalance
         }
@@ -165,7 +165,7 @@ public final class WalletBridge: @unchecked Sendable {
         lastError = nil
 
         // Optimistic debit
-        await creditWallet.recordAdjustmentDebit(
+        await usdcWallet.recordAdjustmentDebit(
             amount: creditAmount,
             description: String(format: "USDC withdrawal ($%.4f) - pending", Double(microUSDC) / 1_000_000.0)
         )
@@ -197,9 +197,9 @@ public final class WalletBridge: @unchecked Sendable {
             return signature
         } catch {
             // Compensating credit — reverse the optimistic debit
-            await creditWallet.recordAdjustmentCredit(
+            await usdcWallet.recordAdjustmentCredit(
                 amount: creditAmount,
-                description: "Withdrawal failed — credits restored"
+                description: "Withdrawal failed — USDC restored"
             )
 
             pendingWithdrawal = false

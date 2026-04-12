@@ -97,9 +97,9 @@ struct EarningsDashboardView: View {
     @ViewBuilder
     private var earningsSection: some View {
         VStack(spacing: 8) {
-            Text(String(format: "%.2f", contributor.earnings.totalCredits.value))
+            Text(contributor.earnings.totalCredits.description)
                 .font(.system(size: 36, weight: .bold, design: .rounded))
-            Text("Credits Earned")
+            Text("USDC Earned")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

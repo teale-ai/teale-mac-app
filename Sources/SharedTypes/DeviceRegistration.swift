@@ -39,12 +39,12 @@ public struct AccountInfo: Codable, Sendable {
     public var id: UUID
     public var email: String?
     public var devices: [DeviceInfo]
-    public var creditBalance: Double
+    public var balance: Double
 
-    public init(id: UUID = UUID(), email: String? = nil, devices: [DeviceInfo] = [], creditBalance: Double = 0) {
+    public init(id: UUID = UUID(), email: String? = nil, devices: [DeviceInfo] = [], balance: Double = 0) {
         self.id = id
         self.email = email
         self.devices = devices
-        self.creditBalance = creditBalance
+        self.balance = balance
     }
 }

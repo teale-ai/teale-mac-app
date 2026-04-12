@@ -64,7 +64,7 @@ public final class AppState {
     public var wanLastError: String?
 
     // Credits
-    public var wallet: CreditWallet
+    public var wallet: USDCWallet
 
     // Solana Wallet (USDC on-chain bridge)
     public var walletBridge: WalletBridge?
@@ -258,7 +258,7 @@ public final class AppState {
         self.agentManager = AgentManager()
 
         // Wallet placeholder — replaced async on launch
-        self.wallet = CreditWallet.placeholder()
+        self.wallet = USDCWallet.placeholder()
         self.maxStorageGB = persistedMaxStorage
         self.wanRelayURL = UserDefaults.standard.string(forKey: Self.wanRelayURLKey) ?? "wss://teale-relay.fly.dev/ws"
         // Start server eagerly so it's available even if the MenuBarExtra is never clicked.
@@ -341,9 +341,9 @@ public final class AppState {
         await applyInferenceBackendSelection()
 
         // Initialize credit wallet
-        let ledger = await CreditLedger()
+        let ledger = await USDCLedger()
         await ledger.applyWelcomeBonusIfNeeded()
-        let realWallet = CreditWallet(ledger: ledger)
+        let realWallet = USDCWallet(ledger: ledger)
         await realWallet.refreshBalance()
         self.wallet = realWallet
 
@@ -368,8 +368,8 @@ public final class AppState {
                 autoNegotiate: false,
                 maxBudgetPerTransaction: 50.0,
                 delegationRules: [
-                    DelegationRule(capability: "inference", maxCreditSpend: 10.0),
-                    DelegationRule(capability: "general-chat", maxCreditSpend: 5.0),
+                    DelegationRule(capability: "inference", maxSpend: 10.0),
+                    DelegationRule(capability: "general-chat", maxSpend: 5.0),
                 ]
             )
         )
@@ -389,13 +389,13 @@ public final class AppState {
 
         // Initialize Solana wallet bridge if enabled
         if solanaWalletEnabled {
-            await initializeSolanaWallet(creditWallet: realWallet)
+            await initializeSolanaWallet(usdcWallet: realWallet)
         }
 
         // Wire credit transfer handling
         clusterManager.onCreditTransferReceived = { [weak self] payload, peer in
             guard let self = self else { return }
-            let amount = CreditAmount(payload.amount)
+            let amount = USDCAmount(payload.amount)
             let senderName = payload.senderDeviceName ?? peer.deviceInfo.name
             let modelID = payload.modelID
             let tokenCount = payload.tokenCount
@@ -428,11 +428,11 @@ public final class AppState {
                 )
             }
 
-            let confirm = CreditTransferConfirmPayload(
+            let confirm = USDCTransferConfirmPayload(
                 transferID: payload.transferID,
                 receiverNodeID: self.clusterManager.localDeviceInfo.id.uuidString
             )
-            try? await peer.connection.send(.creditTransferConfirm(confirm))
+            try? await peer.connection.send(.usdcTransferConfirm(confirm))
         }
     }
 
@@ -448,11 +448,11 @@ public final class AppState {
 
     // MARK: - Solana Wallet
 
-    private func initializeSolanaWallet(creditWallet: CreditWallet) async {
+    private func initializeSolanaWallet(usdcWallet: USDCWallet) async {
         do {
             let solanaIdentity = try SolanaIdentity.loadOrCreate()
             let config: WalletKitConfig = solanaNetwork == "mainnet" ? .mainnet : .devnet
-            let bridge = WalletBridge(identity: solanaIdentity, creditWallet: creditWallet, config: config)
+            let bridge = WalletBridge(identity: solanaIdentity, creditWallet: usdcWallet, config: config)
             await bridge.startMonitoring()
             self.walletBridge = bridge
         } catch {
@@ -462,7 +462,7 @@ public final class AppState {
 
     private func toggleSolanaWallet() async {
         if solanaWalletEnabled {
-            await initializeSolanaWallet(creditWallet: wallet)
+            await initializeSolanaWallet(usdcWallet: wallet)
         } else {
             if let bridge = walletBridge {
                 await bridge.stopMonitoring()
@@ -649,7 +649,7 @@ public final class AppState {
         let success = await wallet.sendTransfer(amount: amount, toPeer: peerNodeID, memo: memo)
         guard success else { return false }
 
-        let payload = CreditTransferPayload(
+        let payload = USDCTransferPayload(
             senderNodeID: Self.stableNodeID(),
             senderDeviceName: ProcessInfo.processInfo.hostName,
             amount: amount,
@@ -709,13 +709,13 @@ public final class AppState {
             return
         }
 
-        let amount = CreditPricing.cost(tokenCount: record.tokenCount, model: model)
+        let amount = InferencePricing.cost(tokenCount: record.tokenCount, model: model)
         let peerNodeID = record.peer.id.uuidString
         let sameOwner = isSameOwner(peer: record.peer)
         let requesterNodeID = Self.stableNodeID()
         let requesterName = ProcessInfo.processInfo.hostName
         let memo = "LAN inference settlement for \(record.tokenCount) tokens of \(model.name)"
-        let payload = CreditTransferPayload(
+        let payload = USDCTransferPayload(
             senderNodeID: requesterNodeID,
             senderDeviceName: requesterName,
             amount: amount.value,
@@ -759,7 +759,7 @@ public final class AppState {
         return modelDescriptorForExternalID(modelID)
     }
 
-    private func isInferenceSettlement(_ payload: CreditTransferPayload) -> Bool {
+    private func isInferenceSettlement(_ payload: USDCTransferPayload) -> Bool {
         payload.modelID != nil || payload.tokenCount != nil
     }
 

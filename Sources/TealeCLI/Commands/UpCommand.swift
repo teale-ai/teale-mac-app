@@ -74,7 +74,7 @@ struct Up: AsyncParsableCommand {
         let forwardAddress = config.forwardEarningsTo
         var forwardingTask: Task<Void, Never>?
         if let address = forwardAddress {
-            forwardingTask = startCreditForwarding(appState: appState, toAddress: address)
+            forwardingTask = startUSDCForwarding(appState: appState, toAddress: address)
         }
 
         // Print status
@@ -185,7 +185,7 @@ struct Up: AsyncParsableCommand {
     // MARK: - Credit Forwarding
 
     /// Periodically checks wallet balance and forwards earnings to the configured address.
-    private func startCreditForwarding(appState: AppState, toAddress: String) -> Task<Void, Never> {
+    private func startUSDCForwarding(appState: AppState, toAddress: String) -> Task<Void, Never> {
         Task {
             // Check every 60 seconds for new earnings to forward
             while !Task.isCancelled {
@@ -205,7 +205,7 @@ struct Up: AsyncParsableCommand {
                         memo: "Auto-forward to \(toAddress)"
                     )
                     if success {
-                        printErr("Forwarded \(String(format: "%.2f", amount)) credits to \(toAddress)")
+                        printErr("Forwarded \(String(format: "%.2f", amount)) USDC to \(toAddress)")
                     }
                 }
             }

@@ -57,19 +57,13 @@ private struct BalanceCard: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
-            Text(String(format: "%.2f", appState.wallet.balance.value))
+            Text(appState.wallet.balance.description)
                 .font(.system(size: 36, weight: .bold, design: .rounded))
                 .foregroundStyle(.primary)
 
-            Text(appState.loc("wallet.credits"))
+            Text("USDC")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-
-            if appState.walletBridge != nil {
-                Text(appState.wallet.balance.usdFormatted + " USDC")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 16)
@@ -174,7 +168,7 @@ private struct SendCreditsSection: View {
             isSending = false
             withAnimation {
                 if success {
-                    resultMessage = "Sent \(String(format: "%.2f", amount)) credits"
+                    resultMessage = "Sent \(String(format: "$%.2f", amount)) USDC"
                     amountText = ""
                     memo = ""
                 } else {
@@ -221,25 +215,25 @@ private struct PricingGuideSection: View {
                 emoji: "💬",
                 title: appState.loc("wallet.quickQuestion"),
                 detail: appState.loc("wallet.quickQuestionDetail"),
-                creditCost: "~0.5 credits"
+                creditCost: "~$0.00005"
             ),
             UsageExample(
                 emoji: "📝",
                 title: appState.loc("wallet.writeEmail"),
                 detail: appState.loc("wallet.writeEmailDetail"),
-                creditCost: "~1-2 credits"
+                creditCost: "~$0.0001-0.0002"
             ),
             UsageExample(
                 emoji: "💻",
                 title: appState.loc("wallet.debugCode"),
                 detail: appState.loc("wallet.debugCodeDetail"),
-                creditCost: "~2-5 credits"
+                creditCost: "~$0.0002-0.0005"
             ),
             UsageExample(
                 emoji: "📖",
                 title: appState.loc("wallet.summarize"),
                 detail: appState.loc("wallet.summarizeDetail"),
-                creditCost: "~3-8 credits"
+                creditCost: "~$0.0003-0.0008"
             ),
         ]
     }
@@ -346,7 +340,7 @@ private struct CreditSummarySection: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             }
 
-            Text("Earn credits by serving inference to other nodes. Spend credits to use remote models.")
+            Text("Earn USDC by serving inference to other nodes. Spend USDC to use remote models.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
@@ -395,7 +389,7 @@ private struct TransactionsSection: View {
 // MARK: - Transaction Row
 
 private struct TransactionRow: View {
-    let transaction: CreditTransaction
+    let transaction: USDCTransaction
 
     var body: some View {
         HStack(spacing: 10) {
@@ -432,27 +426,25 @@ private struct TransactionRow: View {
         case .bonus: return "gift.fill"
         case .adjustment: return "arrow.left.arrow.right"
         case .transfer: return isSentTransfer ? "arrow.up.right.circle.fill" : "arrow.down.left.circle.fill"
-        case .deposit: return "arrow.down.to.line.circle.fill"
-        case .withdrawal: return "arrow.up.to.line.circle.fill"
         }
     }
 
     private var iconColor: Color {
         switch transaction.type {
-        case .earned, .bonus, .sdkEarning, .deposit: return .green
-        case .spent, .withdrawal: return .red
+        case .earned, .bonus, .sdkEarning: return .green
+        case .spent: return .red
         case .adjustment: return .blue
         case .transfer: return isSentTransfer ? .orange : .blue
         }
     }
 
     private var amountText: String {
-        let sign = (transaction.type == .spent || transaction.type == .withdrawal || isSentTransfer) ? "-" : "+"
-        return "\(sign)\(String(format: "%.2f", transaction.amount.value))"
+        let sign = (transaction.type == .spent || isSentTransfer) ? "-" : "+"
+        return "\(sign)\(transaction.amount.description)"
     }
 
     private var amountColor: Color {
-        (transaction.type == .spent || transaction.type == .withdrawal || isSentTransfer) ? .red : .green
+        (transaction.type == .spent || isSentTransfer) ? .red : .green
     }
 }
 
@@ -575,8 +567,8 @@ private struct SolanaWalletSection: View {
         withdrawResult = nil
 
         do {
-            let credits = CreditAmount(amount)
-            let sig = try await bridge.withdraw(creditAmount: credits, to: destinationAddress)
+            let usdcAmount = USDCAmount(amount)
+            let sig = try await bridge.withdraw(creditAmount: usdcAmount, to: destinationAddress)
             withdrawResult = "Success! Tx: \(sig.prefix(16))..."
             withdrawAmount = ""
             destinationAddress = ""

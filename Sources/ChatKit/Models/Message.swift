@@ -30,7 +30,7 @@ public enum MessageMetadata: Codable, Sendable, Equatable {
         public var tokensPrompt: Int?
         public var tokensCompletion: Int?
         public var inferenceNodeID: String?
-        public var creditCost: Double?
+        public var cost: Double?
     }
 
     public struct ToolCallMeta: Codable, Sendable, Equatable {

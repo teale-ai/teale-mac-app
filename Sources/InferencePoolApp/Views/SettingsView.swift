@@ -255,9 +255,9 @@ struct SettingsView: View {
 
             // Credits
             Section(appState.loc("settings.credits")) {
-                LabeledContent(appState.loc("settings.balance"), value: String(format: "%.2f credits", appState.wallet.balance.value))
-                LabeledContent(appState.loc("settings.totalEarned"), value: String(format: "%.2f", appState.wallet.totalEarned.value))
-                LabeledContent(appState.loc("settings.totalSpent"), value: String(format: "%.2f", appState.wallet.totalSpent.value))
+                LabeledContent(appState.loc("settings.balance"), value: appState.wallet.balance.description + " USDC")
+                LabeledContent(appState.loc("settings.totalEarned"), value: appState.wallet.totalEarned.description)
+                LabeledContent(appState.loc("settings.totalSpent"), value: appState.wallet.totalSpent.description)
 
                 Button(appState.loc("settings.viewWallet")) {
                     appState.currentView = .wallet

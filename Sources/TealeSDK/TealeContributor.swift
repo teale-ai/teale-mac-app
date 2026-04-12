@@ -43,7 +43,7 @@ public final class TealeContributor {
     private var throttler: AdaptiveThrottler?
     private var resourceGovernor: ResourceGovernor?
     private var wanManager: WANManager?
-    private var wallet: CreditWallet?
+    private var wallet: USDCWallet?
     private var inferenceProvider: MLXProvider?
     private var wanBridge: SDKWANBridge?
     private var earningsReporter: EarningsReporter?
@@ -130,8 +130,8 @@ public final class TealeContributor {
             self.inferenceProvider = provider
 
             // 5. Set up credit wallet
-            let ledger = await CreditLedger()
-            let wallet = CreditWallet(ledger: ledger)
+            let ledger = await USDCLedger()
+            let wallet = USDCWallet(ledger: ledger)
             await wallet.refreshBalance()
             self.wallet = wallet
 
