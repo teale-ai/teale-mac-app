@@ -266,6 +266,32 @@ struct SettingsView: View {
                 .controlSize(.small)
             }
 
+            // Solana Wallet
+            Section("Solana Wallet") {
+                Toggle("Enable Solana Wallet", isOn: $state.solanaWalletEnabled)
+                Text("Connect an on-chain Solana wallet for USDC deposits and withdrawals.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+
+                if appState.solanaWalletEnabled {
+                    Picker("Network", selection: $state.solanaNetwork) {
+                        Text("Devnet (test)").tag("devnet")
+                        Text("Mainnet (real USDC)").tag("mainnet")
+                    }
+
+                    if let bridge = appState.walletBridge {
+                        LabeledContent("Address", value: String(bridge.solanaAddress.prefix(8)) + "..." + String(bridge.solanaAddress.suffix(4)))
+                        LabeledContent("On-chain USDC", value: bridge.usdcBalanceFormatted)
+                    }
+
+                    if appState.solanaNetwork == "mainnet" {
+                        Label("Connected to Solana mainnet — real USDC", systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+
             // Model Management
             Section(appState.loc("settings.modelStorage")) {
                 Toggle("Auto-manage models", isOn: $state.autoManageModels)

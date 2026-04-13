@@ -1,6 +1,7 @@
 import SwiftUI
 import AppCore
 import SharedTypes
+import WANKit
 
 struct ChatView: View {
     @Environment(AppState.self) private var appState
@@ -9,6 +10,7 @@ struct ChatView: View {
     @State private var streamingText: String = ""
     @State private var isGenerating: Bool = false
     @State private var showModelPicker: Bool = false
+    @State private var selectedPeerModel: String?
 
     /// Models that are downloaded and ready to load
     private var availableModels: [ModelDescriptor] {
@@ -19,6 +21,19 @@ struct ChatView: View {
 
     private var loadedModel: ModelDescriptor? {
         appState.engineStatus.currentModel
+    }
+
+    /// Models available on connected WAN peers
+    private var wanPeerModels: [(model: String, peerName: String)] {
+        guard appState.wanEnabled else { return [] }
+        var results: [(String, String)] = []
+        let localModel = loadedModel?.huggingFaceRepo
+        for peer in appState.wanManager.state.connectedPeers {
+            for model in peer.loadedModels where model != localModel {
+                results.append((model, peer.displayName))
+            }
+        }
+        return results
     }
 
     var body: some View {
@@ -171,24 +186,50 @@ struct ChatView: View {
     @ViewBuilder
     private var modelPickerButton: some View {
         Menu {
-            if availableModels.isEmpty {
-                Text("No models downloaded")
-            } else {
-                ForEach(availableModels) { model in
-                    Button {
-                        Task { await switchModel(model) }
-                    } label: {
-                        HStack {
-                            Text(model.name)
-                            Text(model.parameterCount)
-                                .foregroundStyle(.secondary)
-                            if loadedModel?.id == model.id {
-                                Image(systemName: "checkmark")
+            // Local models
+            if !availableModels.isEmpty {
+                Section("Local Models") {
+                    ForEach(availableModels) { model in
+                        Button {
+                            selectedPeerModel = nil
+                            Task { await switchModel(model) }
+                        } label: {
+                            HStack {
+                                Text(model.name)
+                                Text(model.parameterCount)
+                                    .foregroundStyle(.secondary)
+                                if loadedModel?.id == model.id && selectedPeerModel == nil {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                        .disabled(loadedModel?.id == model.id && selectedPeerModel == nil)
+                    }
+                }
+            }
+
+            // WAN peer models
+            if !wanPeerModels.isEmpty {
+                Section("WAN Peers") {
+                    ForEach(wanPeerModels, id: \.model) { entry in
+                        Button {
+                            selectedPeerModel = entry.model
+                        } label: {
+                            HStack {
+                                Text(entry.model.components(separatedBy: "/").last ?? entry.model)
+                                Text("via \(entry.peerName)")
+                                    .foregroundStyle(.secondary)
+                                if selectedPeerModel == entry.model {
+                                    Image(systemName: "checkmark")
+                                }
                             }
                         }
                     }
-                    .disabled(loadedModel?.id == model.id)
                 }
+            }
+
+            if availableModels.isEmpty && wanPeerModels.isEmpty {
+                Text("No models available")
             }
 
             Divider()
@@ -200,10 +241,16 @@ struct ChatView: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: "cpu")
+                Image(systemName: selectedPeerModel != nil ? "network" : "cpu")
                     .font(.caption2)
-                if let model = loadedModel {
+                if let peerModel = selectedPeerModel {
+                    Text(peerModel.components(separatedBy: "/").last ?? peerModel)
+                        .font(.caption.weight(.medium))
+                } else if let model = loadedModel {
                     Text(model.name)
+                        .font(.caption.weight(.medium))
+                } else if hasInferenceTarget {
+                    Text("Peer model")
                         .font(.caption.weight(.medium))
                 } else {
                     Text("No model")
@@ -256,7 +303,7 @@ struct ChatView: View {
             APIMessage(role: msg.role, content: msg.content)
         }
 
-        let request = ChatCompletionRequest(messages: apiMessages, stream: true)
+        let request = ChatCompletionRequest(model: selectedPeerModel, messages: apiMessages, stream: true)
         let stream = appState.engine.generate(request: request)
 
         do {

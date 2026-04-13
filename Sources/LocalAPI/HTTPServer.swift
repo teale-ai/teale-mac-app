@@ -5,25 +5,31 @@ import InferenceEngine
 
 // MARK: - HTTP Server
 
+/// Returns model IDs available on connected peers (WAN + cluster).
+public typealias PeerModelProvider = @Sendable () async -> [(id: String, ownedBy: String)]
+
 public actor LocalHTTPServer {
     private let engine: InferenceEngineManager
     public let port: Int
     private let apiKeyStore: APIKeyStore
     private let allowNetworkAccess: Bool
     private let controller: (any LocalAppControlling)?
+    private let peerModelProvider: PeerModelProvider?
 
     public init(
         engine: InferenceEngineManager,
         port: Int = 11435,
         apiKeyStore: APIKeyStore = APIKeyStore(),
         allowNetworkAccess: Bool = false,
-        controller: (any LocalAppControlling)? = nil
+        controller: (any LocalAppControlling)? = nil,
+        peerModelProvider: PeerModelProvider? = nil
     ) {
         self.engine = engine
         self.port = port
         self.apiKeyStore = apiKeyStore
         self.allowNetworkAccess = allowNetworkAccess
         self.controller = controller
+        self.peerModelProvider = peerModelProvider
     }
 
     public func start() async throws {
@@ -31,6 +37,7 @@ public actor LocalHTTPServer {
         let keyStore = self.apiKeyStore
         let requireAuth = self.allowNetworkAccess
         let controller = self.controller
+        let peerModels = self.peerModelProvider
 
         let router = Router()
 
@@ -55,7 +62,7 @@ public actor LocalHTTPServer {
 
         // Models endpoint
         router.get("/v1/models") { _, _ -> Response in
-            return try await ModelsRoute.handle(engine: engine)
+            return try await ModelsRoute.handle(engine: engine, peerModelProvider: peerModels)
         }
 
         // Chat completions endpoint
