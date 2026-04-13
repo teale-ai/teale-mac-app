@@ -530,9 +530,9 @@ public final class WANManager: @unchecked Sendable {
         }
     }
 
-    private func attemptReconnect(nodeID: String, maxAttempts: Int = 5) {
+    private func attemptReconnect(nodeID: String, maxAttempts: Int = 20) {
         Task { [weak self] in
-            var delay: TimeInterval = 5
+            var delay: TimeInterval = 3
             for attempt in 1...maxAttempts {
                 guard let self else { return }
                 guard self.isEnabled, self.connectedPeers[nodeID] == nil else { return }
@@ -554,7 +554,7 @@ public final class WANManager: @unchecked Sendable {
                     try? await self.discoveryService?.refresh()
                 }
 
-                delay = min(delay * 2, 60)
+                delay = min(delay * 1.5, 30)
             }
             self?.wanLog("All reconnect attempts exhausted for \(nodeID.prefix(16))...")
         }
