@@ -80,7 +80,12 @@ public final class AppState {
         }
     }
     public var solanaNetwork: String = UserDefaults.standard.string(forKey: "teale.solanaNetwork") ?? "devnet" {
-        didSet { UserDefaults.standard.set(solanaNetwork, forKey: "teale.solanaNetwork") }
+        didSet {
+            UserDefaults.standard.set(solanaNetwork, forKey: "teale.solanaNetwork")
+            if solanaWalletEnabled {
+                Task { await toggleSolanaWallet() }
+            }
+        }
     }
 
     // Auth
@@ -639,12 +644,28 @@ public final class AppState {
     public func startServer() async {
         guard !isServerRunning else { return }
         isServerRunning = true
+        let wanMgr = self.wanManager
+        let clusterMgr = self.clusterManager
         let server = LocalHTTPServer(
             engine: engine,
             port: serverPort,
             apiKeyStore: apiKeyStore,
             allowNetworkAccess: allowNetworkAccess,
-            controller: RemoteControlBridge(appState: self)
+            controller: RemoteControlBridge(appState: self),
+            peerModelProvider: {
+                var models: [(id: String, ownedBy: String)] = []
+                for peer in wanMgr.state.connectedPeers {
+                    for model in peer.loadedModels {
+                        models.append((id: model, ownedBy: "wan:\(peer.displayName)"))
+                    }
+                }
+                for peer in await clusterMgr.topology.connectedPeers {
+                    for model in peer.loadedModels {
+                        models.append((id: model, ownedBy: "lan:\(peer.deviceInfo.name)"))
+                    }
+                }
+                return models
+            }
         )
         Task.detached {
             try? await server.start()
@@ -884,10 +905,10 @@ public final class AppState {
                     if relayStatus == .connected {
                         self.wanLastError = nil
                     } else {
-                        // Surface the actual problem instead of silently pretending it worked
-                        let failedSteps = diagnostics.filter { $0.contains("FAILED") }
-                        if !failedSteps.isEmpty {
-                            self.wanLastError = failedSteps.joined(separator: "; ")
+                        // Only surface relay failures — STUN failures are non-fatal (relay fallback works)
+                        let relayFailures = diagnostics.filter { $0.contains("FAILED") && $0.contains("Relay") }
+                        if !relayFailures.isEmpty {
+                            self.wanLastError = relayFailures.joined(separator: "; ")
                         } else {
                             self.wanLastError = "Relay not connected (\(relayStatus.rawValue))"
                         }
