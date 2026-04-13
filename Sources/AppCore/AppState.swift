@@ -23,6 +23,7 @@ public final class AppState {
         static let maxStorageGB = "teale.maxStorageGB"
         static let wanRelayURL = "teale.wanRelayURL"
         static let installNodeID = "teale.installNodeID"
+        static let lastLoadedModelID = "teale.lastLoadedModelID"
     }
 
     private static let stableNodeIDKey = "teale.stable_node_id"
@@ -49,13 +50,17 @@ public final class AppState {
     // Cluster (LAN)
     public let clusterManager: ClusterManager
     public var clusterEnabled: Bool = false {
-        didSet { toggleCluster() }
+        didSet {
+            UserDefaults.standard.set(clusterEnabled, forKey: "teale.clusterEnabled")
+            toggleCluster()
+        }
     }
 
     // WAN P2P
     public let wanManager: WANManager
     public var wanEnabled: Bool = false {
         didSet {
+            UserDefaults.standard.set(wanEnabled, forKey: "teale.wanEnabled")
             guard !isUpdatingWANToggle else { return }
             toggleWAN()
         }
@@ -147,7 +152,10 @@ public final class AppState {
         didSet { UserDefaults.standard.set(wanRelayURL, forKey: "teale.wan_relay_url") }
     }
     public var autoManageModels: Bool = false {
-        didSet { demandTracker.autoManageEnabled = autoManageModels }
+        didSet {
+            UserDefaults.standard.set(autoManageModels, forKey: "teale.autoManageModels")
+            demandTracker.autoManageEnabled = autoManageModels
+        }
     }
 
     private var isUpdatingWANToggle: Bool = false
@@ -328,6 +336,14 @@ public final class AppState {
 
         // Scan which models are already downloaded
         await refreshDownloadedModels()
+
+        // Reload the last loaded model (skip on first-ever launch)
+        if let lastModelID = UserDefaults.standard.string(forKey: Preferences.lastLoadedModelID),
+           let descriptor = ModelCatalog.allModels.first(where: { $0.id == lastModelID }),
+           downloadedModelIDs.contains(lastModelID) {
+            await loadModel(descriptor)
+        }
+
         let nodeID = Self.stableNodeID()
 
         // Check auth session (skip if Supabase not configured)
@@ -385,6 +401,15 @@ public final class AppState {
             Task { @MainActor in
                 await self.downloadModel(model)
             }
+        }
+
+        // Restore persisted toggle states
+        autoManageModels = UserDefaults.standard.bool(forKey: "teale.autoManageModels")
+        if UserDefaults.standard.bool(forKey: "teale.clusterEnabled") {
+            clusterEnabled = true
+        }
+        if UserDefaults.standard.bool(forKey: "teale.wanEnabled") {
+            wanEnabled = true
         }
 
         // Initialize Solana wallet bridge if enabled
@@ -538,6 +563,7 @@ public final class AppState {
             loadingProgress = nil
             engineStatus = .ready(descriptor)
             Self.wanLog("Model loaded successfully: \(descriptor.huggingFaceRepo), calling syncAdvertised...")
+            UserDefaults.standard.set(descriptor.id, forKey: Preferences.lastLoadedModelID)
             syncAdvertisedLoadedModels()
             await refreshDownloadedModels()
         } catch {
@@ -571,6 +597,7 @@ public final class AppState {
             loadingPhase = ""
             loadingProgress = nil
             engineStatus = .ready(descriptor)
+            UserDefaults.standard.set(descriptor.id, forKey: Preferences.lastLoadedModelID)
             if wanEnabled {
                 await wanManager.updateLocalLoadedModels([descriptor.huggingFaceRepo])
             }
@@ -605,6 +632,7 @@ public final class AppState {
         await engine.unloadModel()
         selectedModel = nil
         engineStatus = .idle
+        UserDefaults.standard.removeObject(forKey: Preferences.lastLoadedModelID)
         syncAdvertisedLoadedModels()
     }
 
