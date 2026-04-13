@@ -103,6 +103,29 @@ public actor WANProvider: InferenceProvider {
             return
         }
 
+        // If the local provider (which may be a ClusterProvider) can handle this request,
+        // prefer it over WAN — LAN is faster and free.
+        if localModel == nil {
+            let localStream = localProvider.generate(request: request)
+            var gotChunks = false
+            do {
+                for try await chunk in localStream {
+                    gotChunks = true
+                    continuation.yield(chunk)
+                }
+                if gotChunks {
+                    continuation.finish()
+                    return
+                }
+            } catch {
+                if gotChunks {
+                    continuation.finish(throwing: error)
+                    return
+                }
+                // Local/cluster couldn't handle it, fall through to WAN
+            }
+        }
+
         // Otherwise route to a connected WAN peer if one is serving a suitable model.
         // Group-first: if groupID is set, prefer group peers.
         if let peer = wanManager.connectedPeerForInference(preferredModel: requestedModel, groupID: request.groupID) {
