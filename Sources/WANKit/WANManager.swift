@@ -419,6 +419,8 @@ public final class WANManager: @unchecked Sendable {
     }
 
     func connectedPeerForInference(preferredModel modelID: String?, groupID: String? = nil) -> ConnectedWANPeer? {
+        let peerSummary = connectedPeers.values.map { "\($0.peerInfo.displayName): models=\($0.peerInfo.capabilities.loadedModels)" }
+        FileHandle.standardError.write(Data("[WAN] connectedPeerForInference: \(connectedPeers.count) peers, preferredModel=\(modelID ?? "nil") peers=[\(peerSummary.joined(separator: ", "))]\n".utf8))
         // If a groupID is specified, try group peers first (group-first routing)
         if let groupID {
             let groupPeers = connectedPeers.values.filter { $0.peerInfo.organizationID == groupID }
@@ -536,6 +538,7 @@ public final class WANManager: @unchecked Sendable {
         case .heartbeat(let payload):
             connectedPeers[peer.peerInfo.nodeID]?.lastHeartbeat = Date()
             connectedPeers[peer.peerInfo.nodeID]?.peerInfo.capabilities.loadedModels = payload.loadedModels
+            FileHandle.standardError.write(Data("[WAN] Heartbeat from \(peer.peerInfo.displayName): loadedModels=\(payload.loadedModels)\n".utf8))
 
             // Send ack
             let ack = HeartbeatPayload(

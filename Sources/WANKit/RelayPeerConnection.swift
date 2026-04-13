@@ -179,10 +179,13 @@ public actor RelayPeerConnection {
             jsonData = data
         }
 
-        guard let message = try? JSONDecoder().decode(ClusterMessage.self, from: jsonData) else {
-            return
+        do {
+            let message = try JSONDecoder().decode(ClusterMessage.self, from: jsonData)
+            messageContinuation?.yield(message)
+        } catch {
+            let preview = String(data: jsonData.prefix(200), encoding: .utf8) ?? "binary"
+            FileHandle.standardError.write(Data("[WAN] RelayPeerConnection: failed to decode ClusterMessage: \(error.localizedDescription)\n    Raw: \(preview)\n".utf8))
         }
-        messageContinuation?.yield(message)
     }
 
     func finishLocally() {
