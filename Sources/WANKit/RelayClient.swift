@@ -340,12 +340,16 @@ public actor RelayClient {
         isConnected = true
         currentBackoff = 1.0
 
+        FileHandle.standardError.write(Data("[WAN] connect() completed, calling receiveLoop()...\n".utf8))
         receiveLoop()
+        FileHandle.standardError.write(Data("[WAN] receiveLoop() returned\n".utf8))
     }
 
     public func disconnect() {
         reconnectTask?.cancel()
         reconnectTask = nil
+        receiveTask?.cancel()
+        receiveTask = nil
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
         isConnected = false
@@ -519,15 +523,25 @@ public actor RelayClient {
 
     // MARK: - Receive Loop
 
-    private nonisolated func receiveLoop() {
-        Task { await _receiveLoop() }
+    private var receiveTask: Task<Void, Never>?
+
+    private func receiveLoop() {
+        FileHandle.standardError.write(Data("[WAN] receiveLoop() called, creating task...\n".utf8))
+        receiveTask = Task { [weak self] in
+            FileHandle.standardError.write(Data("[WAN] receiveLoop task started\n".utf8))
+            await self?._receiveLoop()
+        }
     }
 
     private func _receiveLoop() {
-        guard let ws = webSocketTask else { return }
+        guard let ws = webSocketTask else {
+            FileHandle.standardError.write(Data("[WAN] _receiveLoop: no webSocketTask, exiting\n".utf8))
+            return
+        }
 
         Task {
             do {
+                FileHandle.standardError.write(Data("[WAN] _receiveLoop: waiting for WebSocket message...\n".utf8))
                 let wsMessage = try await ws.receive()
                 let data: Data
                 switch wsMessage {
@@ -542,12 +556,18 @@ public actor RelayClient {
 
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .deferredToDate
-                if let message = try? decoder.decode(RelayMessage.self, from: data) {
+                let preview = String(data: data.prefix(100), encoding: .utf8) ?? "binary"
+                FileHandle.standardError.write(Data("[WAN] Relay recv: \(preview)\n".utf8))
+                do {
+                    let message = try decoder.decode(RelayMessage.self, from: data)
                     await handleDecodedMessage(message)
                     // Broadcast to all subscribers
                     for (_, cont) in messageContinuations {
                         cont.yield(message)
                     }
+                } catch {
+                    let preview = String(data: data.prefix(200), encoding: .utf8) ?? "binary"
+                    FileHandle.standardError.write(Data("[WAN] Failed to decode relay message: \(error.localizedDescription)\n    Raw: \(preview)\n".utf8))
                 }
 
                 _receiveLoop()

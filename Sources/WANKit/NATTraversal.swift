@@ -50,26 +50,25 @@ public actor NATTraversal {
         peerInfo: WANPeerInfo,
         sessionID: String
     ) async throws -> HolePunchResult {
-        // Step 1: Discover our own public endpoint
-        let localMapping: NATMapping
+        // Step 1: Discover our own public endpoint (non-fatal — relay fallback available)
+        var localMapping: NATMapping? = nil
+        var localNATType: NATType = .unknown
         do {
             localMapping = try await stunClient.discoverMapping()
+            localNATType = try await stunClient.detectNATType()
         } catch {
-            return .failed(.natTraversalFailed("Failed to discover local mapping: \(error.localizedDescription)"))
+            // STUN failed — skip direct connection, use relay
         }
-
-        // Step 2: Determine if direct connection is feasible
-        let localNATType = try await stunClient.detectNATType()
         let remoteNATType = peerInfo.natType
 
-        let canDirect = localNATType.canHolePunch && remoteNATType.canHolePunch
+        let canDirect = localMapping != nil && localNATType.canHolePunch && remoteNATType.canHolePunch
 
         // Step 3: Exchange connection info via relay
         let connectionInfo = ConnectionInfo(
-            publicIP: localMapping.publicIP,
-            publicPort: localMapping.publicPort,
+            publicIP: localMapping?.publicIP ?? "",
+            publicPort: localMapping?.publicPort ?? 0,
             localIP: Self.preferredLocalIPv4Address(),
-            localPort: localMapping.publicPort,
+            localPort: localMapping?.publicPort ?? 0,
             natType: localNATType,
             wgPublicKey: identity.wgPublicKeyHex
         )
@@ -92,7 +91,7 @@ public actor NATTraversal {
 
         // Step 5: Attempt direct WireGuard connection if NAT types are compatible
         if canDirect, let wgKey = remoteWGKey {
-            if localMapping.publicIP == answer.connectionInfo.publicIP,
+            if localMapping?.publicIP == answer.connectionInfo.publicIP,
                let localIP = answer.connectionInfo.localIP,
                let localPort = answer.connectionInfo.localPort {
                 do {
@@ -137,16 +136,22 @@ public actor NATTraversal {
     public func handleIncomingOffer(
         offer: RelayMessage.OfferPayload
     ) async throws -> WireGuardPeerConnection {
-        // Discover our public endpoint
-        let localMapping = try await stunClient.discoverMapping()
-        let localNATType = try await stunClient.detectNATType()
+        // Discover our public endpoint (non-fatal — we can still use relay)
+        var localMapping: NATMapping? = nil
+        var localNATType: NATType = .unknown
+        do {
+            localMapping = try await stunClient.discoverMapping()
+            localNATType = try await stunClient.detectNATType()
+        } catch {
+            // STUN failed — skip direct connection, use relay
+        }
 
-        // Send answer back
+        // Send answer back (even if STUN failed — peer needs to know we're here)
         let connectionInfo = ConnectionInfo(
-            publicIP: localMapping.publicIP,
-            publicPort: localMapping.publicPort,
+            publicIP: localMapping?.publicIP ?? "",
+            publicPort: localMapping?.publicPort ?? 0,
             localIP: Self.preferredLocalIPv4Address(),
-            localPort: localMapping.publicPort,
+            localPort: localMapping?.publicPort ?? 0,
             natType: localNATType,
             wgPublicKey: identity.wgPublicKeyHex
         )
@@ -165,7 +170,7 @@ public actor NATTraversal {
         }
 
         // Attempt direct connection to offerer
-        if localMapping.publicIP == offer.connectionInfo.publicIP,
+        if localMapping?.publicIP == offer.connectionInfo.publicIP,
            let localIP = offer.connectionInfo.localIP,
            let localPort = offer.connectionInfo.localPort {
             do {
