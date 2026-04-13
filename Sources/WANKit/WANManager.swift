@@ -594,20 +594,30 @@ public final class WANManager: @unchecked Sendable {
 
     private func startRelayListener() {
         relayListenerTask = Task { [weak self] in
-            guard let self = self, let relay = self.relayClient else { return }
-            let messages = await relay.incomingMessages
+            // Re-subscribe in a loop: when the WebSocket reconnects,
+            // the old stream ends (continuations are cleared) and we
+            // need a fresh subscription.
+            while !Task.isCancelled {
+                guard let self = self, let relay = self.relayClient else { return }
+                let messages = await relay.incomingMessages
 
-            for await message in messages {
-                guard !Task.isCancelled else { break }
+                for await message in messages {
+                    guard !Task.isCancelled else { break }
 
-                switch message {
-                case .offer(let offer):
-                    await self.handleIncomingOffer(offer)
-                case .relayOpen(let payload):
-                    await self.handleIncomingRelayOpen(payload)
-                default:
-                    break
+                    switch message {
+                    case .offer(let offer):
+                        self.wanLog("Received incoming offer from \(offer.fromNodeID.prefix(16))...")
+                        await self.handleIncomingOffer(offer)
+                    case .relayOpen(let payload):
+                        self.wanLog("Received relay open from \(payload.fromNodeID.prefix(16))...")
+                        await self.handleIncomingRelayOpen(payload)
+                    default:
+                        break
+                    }
                 }
+                // Stream ended (WebSocket reconnected) — re-subscribe
+                FileHandle.standardError.write(Data("[WAN] Relay listener stream ended, re-subscribing...\n".utf8))
+                try? await Task.sleep(for: .milliseconds(500))
             }
         }
     }
