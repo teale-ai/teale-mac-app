@@ -537,6 +537,7 @@ public final class AppState {
             loadingPhase = ""
             loadingProgress = nil
             engineStatus = .ready(descriptor)
+            Self.wanLog("Model loaded successfully: \(descriptor.huggingFaceRepo), calling syncAdvertised...")
             syncAdvertisedLoadedModels()
             await refreshDownloadedModels()
         } catch {
@@ -700,7 +701,13 @@ public final class AppState {
 
         clusterManager.updateLocalLoadedModels(loadedModels)
         if wanEnabled {
-            Task { await wanManager.updateLocalLoadedModels(loadedModels) }
+            let models = loadedModels
+            Task {
+                Self.wanLog("syncAdvertised: updating WAN loaded models to \(models)")
+                await wanManager.updateLocalLoadedModels(models)
+            }
+        } else {
+            Self.wanLog("syncAdvertised: WAN not enabled, skipping (models=\(loadedModels))")
         }
     }
 
@@ -862,12 +869,14 @@ public final class AppState {
 
                 // Sync loaded models to WAN now that it's enabled
                 // (model may have loaded before WAN was turned on)
+                let currentEngineStatus = await MainActor.run(body: { String(describing: self.engineStatus) })
                 let loadedModels: [String]
                 if case .ready(let descriptor) = await MainActor.run(body: { self.engineStatus }) {
                     loadedModels = [descriptor.huggingFaceRepo]
                 } else {
                     loadedModels = []
                 }
+                AppState.wanLog("Syncing loaded models after WAN enable: engineStatus=\(currentEngineStatus) loadedModels=\(loadedModels)")
                 await self.wanManager.updateLocalLoadedModels(loadedModels)
             } catch {
                 let msg = error.localizedDescription
