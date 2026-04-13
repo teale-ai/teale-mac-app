@@ -74,6 +74,7 @@ public actor WANDiscoveryService {
     private var discoveryTask: Task<Void, Never>?
     private var reregistrationTask: Task<Void, Never>?
     private var localCapabilities: NodeCapabilities?
+    private var forceRediscoveryOnNextResponse: Bool = false
 
     /// Callback when a new peer is discovered
     public var onPeerDiscovered: ((WANPeerInfo) -> Void)?
@@ -106,9 +107,10 @@ public actor WANDiscoveryService {
         // Re-register automatically after relay reconnects
         let caps = capabilities
         let relay = relayClient
-        await relayClient.setOnReconnect {
+        await relayClient.setOnReconnect { [weak self] in
             FileHandle.standardError.write(Data("[WAN] Re-registering with relay after reconnect...\n".utf8))
             try? await relay.register(capabilities: caps)
+            await self?.setForceRediscovery(true)
             try? await relay.discover()
             FileHandle.standardError.write(Data("[WAN] Re-registration complete\n".utf8))
         }
@@ -121,6 +123,10 @@ public actor WANDiscoveryService {
 
         // Initial peer discovery
         try await relayClient.discover()
+    }
+
+    public func setForceRediscovery(_ flag: Bool) {
+        forceRediscoveryOnNextResponse = flag
     }
 
     /// Stop discovery
@@ -194,10 +200,12 @@ public actor WANDiscoveryService {
     private func handleRelayMessage(_ message: RelayMessage) {
         switch message {
         case .discoverResponse(let payload):
+            let shouldForce = forceRediscoveryOnNextResponse
+            forceRediscoveryOnNextResponse = false
             for peer in payload.peers {
                 let isNew = knownPeers[peer.nodeID] == nil
                 knownPeers[peer.nodeID] = peer
-                if isNew {
+                if isNew || shouldForce {
                     onPeerDiscovered?(peer)
                 }
             }

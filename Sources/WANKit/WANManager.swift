@@ -101,6 +101,7 @@ struct ConnectedWANPeer: Sendable {
     var connectionType: WANConnectionType
     var lastHeartbeat: Date
     var latencyMs: Double?
+    var consecutiveHeartbeatFailures: Int = 0
 
     /// Quality score (0-100) for routing decisions. Higher is better.
     var qualityScore: Double {
@@ -523,13 +524,39 @@ public final class WANManager: @unchecked Sendable {
             self.connectedPeers.removeValue(forKey: nodeID)
             self.updateState(mapping: self.state.publicEndpoint, natType: self.state.natType)
 
-            // Try to reconnect if WAN is still enabled and we know this peer
+            // Try to reconnect if WAN is still enabled
             guard self.isEnabled else { return }
-            try? await Task.sleep(for: .seconds(5))
-            guard self.isEnabled, self.connectedPeers[nodeID] == nil else { return }
-            if let peerInfo = await self.discoveryService?.peer(byNodeID: nodeID) {
-                try? await self.connectToPeer(peerInfo)
+            self.attemptReconnect(nodeID: nodeID)
+        }
+    }
+
+    private func attemptReconnect(nodeID: String, maxAttempts: Int = 5) {
+        Task { [weak self] in
+            var delay: TimeInterval = 5
+            for attempt in 1...maxAttempts {
+                guard let self else { return }
+                guard self.isEnabled, self.connectedPeers[nodeID] == nil else { return }
+
+                self.wanLog("Reconnect attempt \(attempt)/\(maxAttempts) for \(nodeID.prefix(16))... (delay: \(delay)s)")
+                try? await Task.sleep(for: .seconds(delay))
+                guard self.isEnabled, self.connectedPeers[nodeID] == nil else { return }
+
+                if let peerInfo = await self.discoveryService?.peer(byNodeID: nodeID) {
+                    do {
+                        try await self.connectToPeer(peerInfo)
+                        self.wanLog("Reconnected to \(peerInfo.displayName) on attempt \(attempt)")
+                        return
+                    } catch {
+                        self.wanLog("Reconnect attempt \(attempt) failed for \(peerInfo.displayName): \(error.localizedDescription)")
+                    }
+                } else {
+                    self.wanLog("Reconnect attempt \(attempt): peer \(nodeID.prefix(16))... not in discovery, refreshing")
+                    try? await self.discoveryService?.refresh()
+                }
+
+                delay = min(delay * 2, 60)
             }
+            self?.wanLog("All reconnect attempts exhausted for \(nodeID.prefix(16))...")
         }
     }
 
@@ -571,7 +598,16 @@ public final class WANManager: @unchecked Sendable {
         wanLog("Discovered peer: \(peer.displayName) nodeID=\(peer.nodeID.prefix(16))... wgKey=\(peer.wgPublicKey?.prefix(16) ?? "nil") models=\(peer.capabilities.loadedModels) available=\(peer.capabilities.isAvailable)")
         guard let config else { wanLog("  -> skip: no config"); return }
         guard peer.nodeID != config.identity.nodeID else { wanLog("  -> skip: self"); return }
-        guard connectedPeers[peer.nodeID] == nil else { wanLog("  -> skip: already connected"); return }
+        if let existing = connectedPeers[peer.nodeID] {
+            let staleness = Date().timeIntervalSince(existing.lastHeartbeat)
+            if staleness < 60 {
+                wanLog("  -> skip: already connected (heartbeat \(Int(staleness))s ago)")
+                return
+            }
+            wanLog("  -> existing connection stale (\(Int(staleness))s), replacing")
+            await existing.connection.cancel()
+            connectedPeers.removeValue(forKey: peer.nodeID)
+        }
         guard peer.wgPublicKey != nil else { wanLog("  -> skip: no wgPublicKey"); return }
         guard peer.capabilities.isAvailable else { wanLog("  -> skip: not available"); return }
         guard !lanPeerNodeIDs.contains(peer.nodeID) else { wanLog("  -> skip: on LAN"); return }
@@ -814,8 +850,22 @@ public final class WANManager: @unchecked Sendable {
                     isGenerating: false
                 )
 
-                for (_, peer) in self.connectedPeers {
-                    try? await peer.connection.send(.heartbeat(heartbeat))
+                for (nodeID, peer) in self.connectedPeers {
+                    do {
+                        try await peer.connection.send(.heartbeat(heartbeat))
+                        self.connectedPeers[nodeID]?.consecutiveHeartbeatFailures = 0
+                    } catch {
+                        let failures = (self.connectedPeers[nodeID]?.consecutiveHeartbeatFailures ?? 0) + 1
+                        self.connectedPeers[nodeID]?.consecutiveHeartbeatFailures = failures
+                        self.wanLog("Heartbeat send failed to \(peer.peerInfo.displayName) (\(failures) consecutive): \(error.localizedDescription)")
+
+                        if failures >= 3 {
+                            self.wanLog("Dropping \(peer.peerInfo.displayName) after \(failures) consecutive heartbeat failures")
+                            await peer.connection.cancel()
+                            self.connectedPeers.removeValue(forKey: nodeID)
+                            self.attemptReconnect(nodeID: nodeID)
+                        }
+                    }
                 }
             }
         }
@@ -843,6 +893,8 @@ public final class WANManager: @unchecked Sendable {
 
                 for nodeID in disconnected {
                     self.connectedPeers.removeValue(forKey: nodeID)
+                    self.wanLog("Health check: pruned peer \(nodeID.prefix(16))..., attempting reconnect")
+                    self.attemptReconnect(nodeID: nodeID)
                 }
 
                 if !disconnected.isEmpty {
