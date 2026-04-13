@@ -208,6 +208,18 @@ public actor WANProvider: InferenceProvider {
                         }
                         continuation.yield(chunk.chunk)
 
+                        // Detect stream completion from finish_reason in chunk
+                        // (handles case where InferenceComplete message is lost on WAN)
+                        if chunk.chunk.choices.first?.finishReason != nil {
+                            continuation.finish()
+                            if totalTokens > 0 {
+                                let model = request.model ?? "unknown"
+                                let peer = connection.remoteNodeID
+                                await self._onRemoteInferenceCompleted?(totalTokens, model, peer)
+                            }
+                            return
+                        }
+
                     case .inferenceComplete(let complete) where complete.requestID == requestID:
                         continuation.finish()
                         // Record spending via callback
