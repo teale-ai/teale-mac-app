@@ -179,10 +179,12 @@ public final class BonjourService: @unchecked Sendable {
     private static func makeLocalServiceNames() -> Set<String> {
         var names: Set<String> = []
 
+        #if canImport(Foundation) && os(macOS)
         if let localizedName = Host.current().localizedName?.trimmingCharacters(in: .whitespacesAndNewlines),
            !localizedName.isEmpty {
             names.insert(localizedName)
         }
+        #endif
 
         let hostName = ProcessInfo.processInfo.hostName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !hostName.isEmpty {

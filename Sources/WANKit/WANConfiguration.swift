@@ -1,5 +1,8 @@
 import Foundation
 import CryptoKit
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - WAN Configuration
 
@@ -31,7 +34,11 @@ public struct WANConfig: Sendable {
         self.relayServerURLs = relayServerURLs
         self.stunServerURLs = stunServerURLs
         self.identity = identity
+        #if os(macOS)
         self.displayName = displayName.isEmpty ? (Host.current().localizedName ?? "Mac") : displayName
+        #else
+        self.displayName = displayName.isEmpty ? UIDevice.current.name : displayName
+        #endif
         self.maxWANPeers = maxWANPeers
         self.maxUploadBandwidthKBs = maxUploadBandwidthKBs
         self.maxDownloadBandwidthKBs = maxDownloadBandwidthKBs

@@ -52,9 +52,33 @@ struct CompanionSettingsView: View {
                         }
                         .labelsHidden()
                     }
+                }
+
+                // WAN P2P
+                Section("WAN Network") {
+                    Toggle("Enable WAN", isOn: Binding(
+                        get: { appState.wanEnabled },
+                        set: { appState.wanEnabled = $0 }
+                    ))
+
+                    if appState.isWANBusy {
+                        HStack {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Connecting...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if let error = appState.wanLastError {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
 
                     HStack {
-                        Text("WAN Relay Server")
+                        Text("Relay Server")
                         Spacer()
                         TextField("wss://relay.teale.com/ws", text: Binding(
                             get: { appState.wanRelayURL },
@@ -66,6 +90,15 @@ struct CompanionSettingsView: View {
                         .textInputAutocapitalization(.never)
                         #endif
                         .autocorrectionDisabled()
+                    }
+
+                    if appState.wanEnabled {
+                        let wanState = appState.wanManager.state
+                        LabeledContent("Relay") {
+                            Text(wanState.relayStatus == .connected ? "Connected" : wanState.relayStatus.rawValue)
+                                .foregroundStyle(wanState.relayStatus == .connected ? .green : .orange)
+                        }
+                        LabeledContent("Peers", value: "\(wanState.connectedPeers.count) connected")
                     }
                 }
 
