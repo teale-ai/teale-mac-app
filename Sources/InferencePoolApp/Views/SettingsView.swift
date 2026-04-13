@@ -313,6 +313,7 @@ struct SettingsView: View {
             wanRelayURL = appState.wanRelayURL
             exoBaseURL = appState.exoBaseURL
             exoPreferredModelID = appState.exoPreferredModelID
+            maxStorage = appState.maxStorageGB
         }
     }
 
