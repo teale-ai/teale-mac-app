@@ -1,4 +1,5 @@
 import SwiftUI
+import SharedTypes
 import AuthKit
 
 struct CompanionSettingsView: View {
@@ -130,7 +131,7 @@ struct CompanionSettingsView: View {
                 // About
                 Section("About") {
                     LabeledContent("App", value: "Teale Companion")
-                    LabeledContent("Version", value: "1.0.0")
+                    LabeledContent("Version", value: BuildVersion.display)
                     LabeledContent("Platform", value: "iOS")
                     HStack {
                         Text("Project")

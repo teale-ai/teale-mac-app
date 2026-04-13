@@ -157,6 +157,11 @@ final class CompanionAppState {
         let hw = HardwareDetector().detect()
         self.hardware = hw
         self.modelManager = ModelManagerService(hardware: hw, maxStorageGB: 20.0)
+
+        // Migrate stale relay URLs from previous versions
+        if wanRelayURL.contains("teale.network") || wanRelayURL.isEmpty {
+            wanRelayURL = "wss://relay.teale.com/ws"
+        }
     }
 
     /// Whether inference is available (local model loaded or remote connected)

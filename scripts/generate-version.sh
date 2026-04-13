@@ -4,7 +4,7 @@
 
 set -e
 
-OUTFILE="Sources/AppCore/BuildVersion.swift"
+OUTFILE="Sources/SharedTypes/BuildVersion.swift"
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 DATE=$(date -u '+%Y-%m-%d %H:%M UTC')
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
