@@ -102,7 +102,9 @@ public final class AppState {
     // Server & API Keys
     public var serverPort: Int = 11435
     public var isServerRunning: Bool = false
-    public var allowNetworkAccess: Bool = false
+    public var allowNetworkAccess: Bool = UserDefaults.standard.bool(forKey: "teale.allowNetworkAccess") {
+        didSet { UserDefaults.standard.set(allowNetworkAccess, forKey: "teale.allowNetworkAccess") }
+    }
     public let apiKeyStore = APIKeyStore()
 
     // Chat
