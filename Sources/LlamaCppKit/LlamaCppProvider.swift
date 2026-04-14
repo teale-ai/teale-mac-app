@@ -12,32 +12,52 @@ public actor LlamaCppProvider: InferenceProvider {
     private let session: URLSession
 
     /// Path to the llama-server binary. Defaults to searching PATH.
-    private let binaryPath: String
+    private var binaryPath: String
 
     /// GPU layers to offload (999 = all layers).
-    private let gpuLayers: Int
+    private var gpuLayers: Int
 
     /// Context size for the server.
-    private let contextSize: Int
+    private var contextSize: Int
 
     /// Number of parallel request slots.
-    private let parallelSlots: Int
+    private var parallelSlots: Int
+
+    /// Batch size for prompt processing.
+    private var batchSize: Int
+
+    /// Whether to disable thinking/reasoning mode.
+    private var reasoningOff: Bool
+
+    /// KV cache quantization type (e.g. "q8_0", "f16").
+    private var kvCacheType: String
+
+    /// Additional raw arguments to pass to llama-server.
+    private var extraArgs: [String]
 
     public init(
         binaryPath: String = "llama-server",
         port: Int = 11436,
         gpuLayers: Int = 999,
-        contextSize: Int = 8192,
-        parallelSlots: Int = 2
+        contextSize: Int = 65536,
+        parallelSlots: Int = 1,
+        batchSize: Int = 4096,
+        reasoningOff: Bool = true,
+        kvCacheType: String = "q8_0",
+        extraArgs: [String] = []
     ) {
         self.binaryPath = binaryPath
         self.serverPort = port
         self.gpuLayers = gpuLayers
         self.contextSize = contextSize
         self.parallelSlots = parallelSlots
+        self.batchSize = batchSize
+        self.reasoningOff = reasoningOff
+        self.kvCacheType = kvCacheType
+        self.extraArgs = extraArgs
 
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 10
+        config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 600
         self.session = URLSession(configuration: config)
     }
@@ -50,7 +70,7 @@ public actor LlamaCppProvider: InferenceProvider {
 
     public func loadModel(_ descriptor: ModelDescriptor) async throws {
         // Stop any existing server
-        await stopServer()
+        stopServer()
 
         _status = .loadingModel(descriptor)
 
@@ -68,7 +88,7 @@ public actor LlamaCppProvider: InferenceProvider {
     }
 
     public func unloadModel() async {
-        await stopServer()
+        stopServer()
         currentDescriptor = nil
         _status = .idle
     }
@@ -88,25 +108,72 @@ public actor LlamaCppProvider: InferenceProvider {
         }
     }
 
+    // MARK: - Configuration
+
+    /// Update all settings at once. Takes effect on next model load.
+    public func updateConfiguration(
+        binaryPath: String? = nil,
+        port: Int? = nil,
+        gpuLayers: Int? = nil,
+        contextSize: Int? = nil,
+        parallelSlots: Int? = nil,
+        batchSize: Int? = nil,
+        reasoningOff: Bool? = nil,
+        kvCacheType: String? = nil,
+        extraArgs: [String]? = nil
+    ) {
+        if let v = binaryPath { self.binaryPath = v }
+        if let v = port { self.serverPort = v }
+        if let v = gpuLayers { self.gpuLayers = v }
+        if let v = contextSize { self.contextSize = v }
+        if let v = parallelSlots { self.parallelSlots = v }
+        if let v = batchSize { self.batchSize = v }
+        if let v = reasoningOff { self.reasoningOff = v }
+        if let v = kvCacheType { self.kvCacheType = v }
+        if let v = extraArgs { self.extraArgs = v }
+    }
+
     // MARK: - Server Lifecycle
 
     private func startServer(modelPath: String) async throws {
         let resolvedBinary = resolvedBinaryPath()
         guard FileManager.default.isExecutableFile(atPath: resolvedBinary) else {
+            _status = .error("llama-server not found at: \(resolvedBinary)")
             throw LlamaCppError.binaryNotFound(resolvedBinary)
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: resolvedBinary)
-        process.arguments = [
+        var args = [
             "--model", modelPath,
             "--host", "127.0.0.1",
             "--port", "\(serverPort)",
             "--n-gpu-layers", "\(gpuLayers)",
             "--ctx-size", "\(contextSize)",
             "--parallel", "\(parallelSlots)",
+            "--batch-size", "\(batchSize)",
+            "--ubatch-size", "2048",
+            "--cache-type-k", kvCacheType,
+            "--cache-type-v", kvCacheType,
             "--no-webui",
         ]
+
+        if reasoningOff {
+            args += ["--reasoning", "off"]
+        }
+
+        // YaRN scaling for context beyond training size
+        if contextSize > 40960 {
+            args += [
+                "--rope-scaling", "yarn",
+                "--yarn-orig-ctx", "40960",
+                "--override-kv", "qwen3.context_length=int:\(contextSize)",
+            ]
+        }
+
+        args += extraArgs
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: resolvedBinary)
+        process.arguments = args
 
         // Set library path so dylibs alongside the binary are found
         let binaryDir = URL(fileURLWithPath: resolvedBinary).deletingLastPathComponent().path
@@ -115,18 +182,24 @@ public actor LlamaCppProvider: InferenceProvider {
         env["DYLD_LIBRARY_PATH"] = existingPath.isEmpty ? binaryDir : "\(binaryDir):\(existingPath)"
         process.environment = env
 
-        // Silence server output by default
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        // Log server output for debugging
+        let logPath = FileManager.default.temporaryDirectory.appendingPathComponent("llama-server.log")
+        let logHandle = try? FileHandle(forWritingTo: logPath)
+        if logHandle == nil {
+            FileManager.default.createFile(atPath: logPath.path, contents: nil)
+        }
+        let outputHandle = (try? FileHandle(forWritingTo: logPath)) ?? FileHandle.nullDevice
+        process.standardOutput = outputHandle
+        process.standardError = outputHandle
 
         try process.run()
         serverProcess = process
 
-        // Wait for the server to become healthy
-        try await waitForHealth(timeoutSeconds: 60)
+        // Wait for the server to become healthy (up to 120s for large models)
+        try await waitForHealth(timeoutSeconds: 120)
     }
 
-    private func stopServer() async {
+    private func stopServer() {
         guard let process = serverProcess, process.isRunning else {
             serverProcess = nil
             return
@@ -140,20 +213,31 @@ public actor LlamaCppProvider: InferenceProvider {
         let url = serverBaseURL.appendingPathComponent("health")
         let deadline = Date().addingTimeInterval(Double(timeoutSeconds))
 
+        let healthSession: URLSession
+        let healthConfig = URLSessionConfiguration.default
+        healthConfig.timeoutIntervalForRequest = 5
+        healthSession = URLSession(configuration: healthConfig)
+
         while Date() < deadline {
+            // Check if the process died
+            if let process = serverProcess, !process.isRunning {
+                serverProcess = nil
+                throw LlamaCppError.serverStartTimeout
+            }
+
             do {
-                let (_, response) = try await session.data(from: url)
+                let (_, response) = try await healthSession.data(from: url)
                 if let http = response as? HTTPURLResponse, http.statusCode == 200 {
                     return
                 }
             } catch {
-                // Server not ready yet
+                // Server not ready yet — connection refused is expected
             }
             try await Task.sleep(nanoseconds: 500_000_000) // 0.5s
         }
 
         // Timed out — kill the server
-        await stopServer()
+        stopServer()
         throw LlamaCppError.serverStartTimeout
     }
 
@@ -229,9 +313,9 @@ public actor LlamaCppProvider: InferenceProvider {
 
         // Search common locations
         let searchPaths = [
-            "/usr/local/bin/\(binaryPath)",
-            "/opt/homebrew/bin/\(binaryPath)",
             "\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin/\(binaryPath)",
+            "/opt/homebrew/bin/\(binaryPath)",
+            "/usr/local/bin/\(binaryPath)",
             // App bundle
             Bundle.main.bundlePath + "/Contents/MacOS/\(binaryPath)",
             Bundle.main.bundlePath + "/Contents/Resources/\(binaryPath)",
@@ -268,11 +352,6 @@ public actor LlamaCppProvider: InferenceProvider {
     /// Check if the server process is currently running.
     public var isServerRunning: Bool {
         serverProcess?.isRunning ?? false
-    }
-
-    /// Update the port number (takes effect on next model load).
-    public func updatePort(_ port: Int) {
-        serverPort = port
     }
 }
 

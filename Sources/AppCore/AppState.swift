@@ -368,10 +368,22 @@ public final class AppState {
         if let lastModelID = UserDefaults.standard.string(forKey: Preferences.lastLoadedModelID) {
             if inferenceBackend == .llamaCpp,
                lastModelID.hasPrefix("gguf-") {
-                // Try to find and load a GGUF model
+                // Scan for GGUF models and try to auto-load the last one
                 scanLocalModels()
                 if let ggufModel = scannedGGUFModels.first(where: { "gguf-\($0.filename)" == lastModelID }) {
-                    await loadGGUFModel(ggufModel)
+                    // Load directly on the provider (before engine wrapping)
+                    let descriptor = ggufModel.toDescriptor()
+                    selectedModel = descriptor
+                    engineStatus = .loadingModel(descriptor)
+                    loadingPhase = "Starting llama-server..."
+                    do {
+                        try await llamaCppProvider.loadModel(descriptor)
+                        engineStatus = .ready(descriptor)
+                        loadingPhase = ""
+                    } catch {
+                        engineStatus = .error(error.localizedDescription)
+                        loadingPhase = ""
+                    }
                 }
             } else if let descriptor = ModelCatalog.allModels.first(where: { $0.id == lastModelID }),
                       downloadedModelIDs.contains(lastModelID) {
@@ -647,8 +659,11 @@ public final class AppState {
     public func loadGGUFModel(_ ggufModel: GGUFModelInfo) async {
         let descriptor = ggufModel.toDescriptor()
 
-        // Ensure llama.cpp backend is selected
+        // Switch backend without triggering the didSet's async applyInferenceBackendSelection
+        // by checking first. If already llamaCpp, no didSet fires.
         if inferenceBackend != .llamaCpp {
+            // Temporarily set the raw UserDefaults value to avoid double-apply
+            UserDefaults.standard.set(InferenceBackend.llamaCpp.rawValue, forKey: Self.inferenceBackendKey)
             inferenceBackend = .llamaCpp
         }
 
@@ -662,12 +677,16 @@ public final class AppState {
             loadingPhase = "Starting llama-server..."
             loadingProgress = nil
 
-            try await engine.loadModel(descriptor)
+            // Load directly on the llama.cpp provider, then update the engine's provider chain
+            try await llamaCppProvider.loadModel(descriptor)
+            let provider = buildActiveInferenceProvider()
+            await engine.setProvider(provider)
 
             loadingPhase = ""
             loadingProgress = nil
             engineStatus = .ready(descriptor)
             UserDefaults.standard.set(descriptor.id, forKey: Preferences.lastLoadedModelID)
+            syncAdvertisedLoadedModels()
             if wanEnabled {
                 await wanManager.updateLocalLoadedModels([descriptor.huggingFaceRepo])
             }
@@ -1095,6 +1114,9 @@ public final class AppState {
         await exoProvider.updateConfiguration(
             baseURLString: exoBaseURL,
             preferredModelID: normalizedExoPreferredModelID
+        )
+        await llamaCppProvider.updateConfiguration(
+            binaryPath: llamaCppBinaryPath
         )
         let provider = buildActiveInferenceProvider()
         await engine.setProvider(provider)
