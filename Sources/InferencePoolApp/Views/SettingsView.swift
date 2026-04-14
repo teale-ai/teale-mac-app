@@ -8,6 +8,7 @@ import CreditKit
 import LocalAPI
 import InferenceEngine
 import AuthKit
+import TealeNetKit
 import WalletKit
 
 struct SettingsView: View {
@@ -279,6 +280,11 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+            }
+
+            // Private TealeNet
+            Section("Private TealeNet (PTN)") {
+                PTNSettingsSection()
             }
 
             // Solana Wallet

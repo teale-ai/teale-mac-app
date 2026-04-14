@@ -217,17 +217,21 @@ public struct NodeCapabilities: Codable, Sendable {
     public var loadedModels: [String]
     public var maxModelSizeGB: Double
     public var isAvailable: Bool
+    /// Private TealeNet memberships this node belongs to.
+    public var ptnIDs: [PTNIdentifier]?
 
     public init(
         hardware: HardwareCapability,
         loadedModels: [String] = [],
         maxModelSizeGB: Double = 0,
-        isAvailable: Bool = true
+        isAvailable: Bool = true,
+        ptnIDs: [PTNIdentifier]? = nil
     ) {
         self.hardware = hardware
         self.loadedModels = loadedModels
         self.maxModelSizeGB = maxModelSizeGB
         self.isAvailable = isAvailable
+        self.ptnIDs = ptnIDs
     }
 }
 

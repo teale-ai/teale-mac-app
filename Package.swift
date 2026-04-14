@@ -70,6 +70,14 @@ let package = Package(
             ]
         ),
 
+        // MARK: - TealeNetKit (Private TealeNet membership & certificates)
+        .target(
+            name: "TealeNetKit",
+            dependencies: [
+                "SharedTypes",
+            ]
+        ),
+
         // MARK: - InferenceEngine (provider-agnostic — no MLX dependency)
         .target(
             name: "InferenceEngine",
@@ -165,6 +173,7 @@ let package = Package(
                 "HardwareProfile",
                 "MLXInference",
                 "LlamaCppKit",
+                "TealeNetKit",
                 "InferenceEngine",
                 "ModelManager",
                 "LocalAPI",
@@ -200,6 +209,7 @@ let package = Package(
                 "InferenceEngine",
                 "ModelManager",
                 "LlamaCppKit",
+                "TealeNetKit",
                 "LocalAPI",
                 "ClusterKit",
                 "WANKit",
