@@ -13,6 +13,7 @@ import CreditKit
 import AgentKit
 import AuthKit
 import WalletKit
+import LlamaCppKit
 
 // MARK: - App State
 
@@ -31,6 +32,7 @@ public final class AppState {
     private static let exoBaseURLKey = "teale.exo_base_url"
     private static let exoPreferredModelIDKey = "teale.exo_preferred_model_id"
     private static let wanRelayURLKey = "teale.wan_relay_url"
+    private static let llamaCppBinaryPathKey = "teale.llamacpp_binary_path"
 
     // Hardware
     public let hardware: HardwareCapability
@@ -39,9 +41,10 @@ public final class AppState {
     // Engine
     public let engine: InferenceEngineManager
 
-    // Local inference provider
+    // Local inference providers
     private let localProvider: MLXProvider
     private let exoProvider: ExoProvider
+    private let llamaCppProvider: LlamaCppProvider
 
     // Models
     public let modelManager: ModelManagerService
@@ -98,6 +101,8 @@ public final class AppState {
     // Local model discovery
     public let localModelScanner = LocalModelScanner()
     public var scannedLocalModels: [LocalModelInfo] = []
+    public let ggufScanner = GGUFScanner()
+    public var scannedGGUFModels: [GGUFModelInfo] = []
 
     // Server & API Keys
     public var serverPort: Int = 11435
@@ -149,6 +154,12 @@ public final class AppState {
     public var exoAvailableModels: [String] = []
     public var exoRunningModels: [String] = []
     public var exoStatusMessage: String = "Exo not configured"
+    public var llamaCppBinaryPath: String = UserDefaults.standard.string(forKey: llamaCppBinaryPathKey) ?? "llama-server" {
+        didSet {
+            UserDefaults.standard.set(llamaCppBinaryPath, forKey: Self.llamaCppBinaryPathKey)
+            Task { await applyInferenceBackendSelection() }
+        }
+    }
     public var maxStorageGB: Double = UserDefaults.standard.object(forKey: Preferences.maxStorageGB) as? Double ?? 50.0 {
         didSet {
             UserDefaults.standard.set(maxStorageGB, forKey: Preferences.maxStorageGB)
@@ -210,6 +221,8 @@ public final class AppState {
         switch inferenceBackend {
         case .localMLX:
             return "MLX"
+        case .llamaCpp:
+            return "llama.cpp"
         case .exo:
             return "Exo"
         }
@@ -251,10 +264,17 @@ public final class AppState {
             preferredModelID: UserDefaults.standard.string(forKey: Self.exoPreferredModelIDKey)
         )
         self.exoProvider = exoProvider
+        let llamaCppProvider = LlamaCppProvider(
+            binaryPath: UserDefaults.standard.string(forKey: Self.llamaCppBinaryPathKey) ?? "llama-server"
+        )
+        self.llamaCppProvider = llamaCppProvider
         let initialProvider: any InferenceProvider
-        if initialBackend == .exo {
+        switch initialBackend {
+        case .exo:
             initialProvider = exoProvider
-        } else {
+        case .llamaCpp:
+            initialProvider = llamaCppProvider
+        case .localMLX:
             initialProvider = mlxProvider
         }
         self.engine = InferenceEngineManager(provider: initialProvider, throttler: throttler)
@@ -615,9 +635,45 @@ public final class AppState {
         }
     }
 
+    /// Load a GGUF model via llama.cpp backend.
+    public func loadGGUFModel(_ ggufModel: GGUFModelInfo) async {
+        let descriptor = ggufModel.toDescriptor()
+
+        // Ensure llama.cpp backend is selected
+        if inferenceBackend != .llamaCpp {
+            inferenceBackend = .llamaCpp
+        }
+
+        do {
+            if case .ready = engineStatus {
+                await engine.unloadModel()
+            }
+
+            selectedModel = descriptor
+            engineStatus = .loadingModel(descriptor)
+            loadingPhase = "Starting llama-server..."
+            loadingProgress = nil
+
+            try await engine.loadModel(descriptor)
+
+            loadingPhase = ""
+            loadingProgress = nil
+            engineStatus = .ready(descriptor)
+            UserDefaults.standard.set(descriptor.id, forKey: Preferences.lastLoadedModelID)
+            if wanEnabled {
+                await wanManager.updateLocalLoadedModels([descriptor.huggingFaceRepo])
+            }
+        } catch {
+            loadingPhase = ""
+            loadingProgress = nil
+            engineStatus = .error(error.localizedDescription)
+        }
+    }
+
     /// Scan for MLX-compatible models in known local directories.
     public func scanLocalModels() {
         scannedLocalModels = localModelScanner.scanAll()
+        scannedGGUFModels = ggufScanner.scanAll()
     }
 
     public func refreshDownloadedModels() async {
@@ -1002,6 +1058,8 @@ public final class AppState {
             return localProvider
         case .exo:
             return exoProvider
+        case .llamaCpp:
+            return llamaCppProvider
         }
     }
 
@@ -1052,6 +1110,7 @@ public enum AppView: Hashable {
 
 public enum InferenceBackend: String, CaseIterable, Hashable, Identifiable {
     case localMLX = "local_mlx"
+    case llamaCpp = "llama_cpp"
     case exo = "exo"
 
     public var id: String { rawValue }
@@ -1060,6 +1119,8 @@ public enum InferenceBackend: String, CaseIterable, Hashable, Identifiable {
         switch self {
         case .localMLX:
             return "Local MLX"
+        case .llamaCpp:
+            return "llama.cpp"
         case .exo:
             return "Exo Gateway"
         }
