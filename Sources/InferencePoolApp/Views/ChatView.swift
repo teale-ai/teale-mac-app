@@ -222,6 +222,9 @@ struct ChatView: View {
     @ViewBuilder
     private var modelPickerButton: some View {
         let models = allAvailableModels
+        // Read WAN state in the view body so SwiftUI observes changes
+        let wanPeerCount = appState.wanManager.state.connectedPeers.count
+        let wanModelCount = appState.wanManager.state.connectedPeers.flatMap(\.loadedModels).count
 
         Menu {
             if !models.isEmpty {
@@ -294,6 +297,7 @@ struct ChatView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
+        .id("picker-\(models.count)-\(wanPeerCount)-\(wanModelCount)")
     }
 
     private func switchModel(_ model: ModelDescriptor) async {
