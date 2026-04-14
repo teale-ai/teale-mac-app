@@ -149,6 +149,53 @@ public struct InferencePricing: Sendable {
 
     /// Minimum balance required to make remote inference requests.
     public static let minimumBalanceForRemote = USDCAmount(0.0001)
+
+    // MARK: - Electricity Cost Floor
+
+    /// Calculate the electricity cost floor for inference.
+    /// This is the minimum the provider should charge to cover their electricity cost.
+    ///
+    /// - Parameters:
+    ///   - tokenCount: Number of tokens generated
+    ///   - tokensPerSecond: Measured generation speed
+    ///   - hardwareWatts: Device power draw during inference (from HardwareCapability.estimatedInferenceWatts)
+    ///   - costPerKWh: Provider's local electricity rate (in USD-equivalent)
+    ///   - marginMultiplier: Markup over raw electricity cost (default 1.2 = 20% margin)
+    /// - Returns: Minimum USDC amount to cover electricity + margin
+    public static func electricityFloorCost(
+        tokenCount: Int,
+        tokensPerSecond: Double,
+        hardwareWatts: Double,
+        costPerKWh: Double,
+        marginMultiplier: Double = 1.2
+    ) -> USDCAmount {
+        guard tokensPerSecond > 0, tokenCount > 0 else { return USDCAmount(0) }
+
+        let secondsOfCompute = Double(tokenCount) / tokensPerSecond
+        let kWhUsed = (hardwareWatts * secondsOfCompute) / 3_600_000.0
+        let electricityCost = kWhUsed * costPerKWh
+        return USDCAmount(electricityCost * marginMultiplier)
+    }
+
+    /// Calculate the effective cost: max of token-based price and electricity floor.
+    /// Ensures the provider never earns less than their electricity cost.
+    public static func effectiveCost(
+        tokenCount: Int,
+        parameterCount: String,
+        quantization: QuantizationType,
+        tokensPerSecond: Double,
+        hardwareWatts: Double,
+        costPerKWh: Double
+    ) -> USDCAmount {
+        let tokenPrice = cost(tokenCount: tokenCount, parameterCount: parameterCount, quantization: quantization)
+        let floor = electricityFloorCost(
+            tokenCount: tokenCount,
+            tokensPerSecond: tokensPerSecond,
+            hardwareWatts: hardwareWatts,
+            costPerKWh: costPerKWh
+        )
+        return max(tokenPrice, floor)
+    }
 }
 
 // MARK: - WalletBalance

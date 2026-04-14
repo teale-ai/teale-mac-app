@@ -282,6 +282,48 @@ struct SettingsView: View {
                 .controlSize(.small)
             }
 
+            // Electricity Cost
+            Section("Electricity Cost") {
+                HStack {
+                    Text("Cost per kWh")
+                    TextField("0.12", value: Binding(
+                        get: { appState.electricityCostPerKWh },
+                        set: { appState.electricityCostPerKWh = $0 }
+                    ), format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 80)
+
+                    Picker("", selection: Binding(
+                        get: { appState.electricityCurrency },
+                        set: { appState.electricityCurrency = $0 }
+                    )) {
+                        Text("USD").tag("USD")
+                        Text("EUR").tag("EUR")
+                        Text("GBP").tag("GBP")
+                        Text("JPY").tag("JPY")
+                        Text("CNY").tag("CNY")
+                        Text("KRW").tag("KRW")
+                        Text("CAD").tag("CAD")
+                        Text("AUD").tag("AUD")
+                        Text("INR").tag("INR")
+                        Text("BRL").tag("BRL")
+                    }
+                    .frame(width: 80)
+                }
+
+                HStack(spacing: 8) {
+                    Text("Device power draw:")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("\(Int(appState.hardware.estimatedInferenceWatts))W (\(appState.hardware.chipName))")
+                        .font(.caption.weight(.medium))
+                }
+
+                Text("Sets the floor price for WWTN inference. You'll never earn less than your electricity cost + 20% margin.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
             // Private TealeNet
             Section("Private TealeNet (PTN)") {
                 PTNSettingsSection()
