@@ -14,6 +14,7 @@ import AgentKit
 import AuthKit
 import WalletKit
 import LlamaCppKit
+import TealeNetKit
 
 // MARK: - App State
 
@@ -58,6 +59,9 @@ public final class AppState {
             toggleCluster()
         }
     }
+
+    // PTN (Private TealeNet)
+    public let ptnManager: PTNManager
 
     // WAN P2P
     public let wanManager: WANManager
@@ -284,6 +288,10 @@ public final class AppState {
         let hostname = ProcessInfo.processInfo.hostName
         let deviceInfo = DeviceInfo(name: hostname, hardware: hw)
         self.clusterManager = ClusterManager(localDeviceInfo: deviceInfo)
+        self.ptnManager = PTNManager(
+            localNodeID: Self.stableNodeID(),
+            localDisplayName: hostname
+        )
         self.wanManager = WANManager()
         if let config = SupabaseConfig.default {
             self.authManager = AuthManager(config: config)
@@ -358,6 +366,9 @@ public final class AppState {
 
     /// Call once at app launch to initialize async components (auth, credit ledger, agent)
     public func initializeAsync() async {
+        // Load PTN memberships
+        await ptnManager.loadMemberships()
+
         // Restore power assertion if keep-awake was enabled
         if keepAwake { updatePowerAssertion() }
 

@@ -364,6 +364,10 @@ public final class ClusterManager: @unchecked Sendable {
         case .groupKeyExchange, .groupMessage, .groupSyncRequest, .groupSyncResponse, .groupConfigUpdate:
             // Handled by ChatKit's P2P messaging layer
             break
+
+        case .ptnJoinRequest, .ptnJoinResponse:
+            // Handled by TealeNetKit's PTN membership layer
+            break
         }
     }
 
