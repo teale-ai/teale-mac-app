@@ -365,10 +365,18 @@ public final class AppState {
         await refreshDownloadedModels()
 
         // Reload the last loaded model (skip on first-ever launch)
-        if let lastModelID = UserDefaults.standard.string(forKey: Preferences.lastLoadedModelID),
-           let descriptor = ModelCatalog.allModels.first(where: { $0.id == lastModelID }),
-           downloadedModelIDs.contains(lastModelID) {
-            await loadModel(descriptor)
+        if let lastModelID = UserDefaults.standard.string(forKey: Preferences.lastLoadedModelID) {
+            if inferenceBackend == .llamaCpp,
+               lastModelID.hasPrefix("gguf-") {
+                // Try to find and load a GGUF model
+                scanLocalModels()
+                if let ggufModel = scannedGGUFModels.first(where: { "gguf-\($0.filename)" == lastModelID }) {
+                    await loadGGUFModel(ggufModel)
+                }
+            } else if let descriptor = ModelCatalog.allModels.first(where: { $0.id == lastModelID }),
+                      downloadedModelIDs.contains(lastModelID) {
+                await loadModel(descriptor)
+            }
         }
 
         let nodeID = Self.stableNodeID()
