@@ -12,28 +12,64 @@ struct ChatView: View {
     @State private var showModelPicker: Bool = false
     @State private var selectedPeerModel: String?
 
-    /// Models that are downloaded and ready to load
-    private var availableModels: [ModelDescriptor] {
-        appState.modelManager.compatibleModels.filter {
-            appState.downloadedModelIDs.contains($0.id)
-        }
+    /// Unified model entry for the picker — local or WAN
+    private enum ModelSource {
+        case local(ModelDescriptor)
+        case wan(modelID: String, deviceCount: Int)
+    }
+
+    private struct AvailableModel: Identifiable {
+        var id: String
+        var displayName: String
+        var source: ModelSource
+        var isLoaded: Bool
     }
 
     private var loadedModel: ModelDescriptor? {
         appState.engineStatus.currentModel
     }
 
-    /// Models available on connected WAN peers
-    private var wanPeerModels: [(model: String, peerName: String)] {
-        guard appState.wanEnabled else { return [] }
-        var results: [(String, String)] = []
-        let localModel = loadedModel?.huggingFaceRepo
-        for peer in appState.wanManager.state.connectedPeers {
-            for model in peer.loadedModels where model != localModel {
-                results.append((model, peer.displayName))
+    /// All available models: downloaded local + WAN peer models, unified
+    private var allAvailableModels: [AvailableModel] {
+        var models: [AvailableModel] = []
+        var seenModelRepos: Set<String> = []
+
+        // Local downloaded models
+        let localModels = appState.modelManager.compatibleModels.filter {
+            appState.downloadedModelIDs.contains($0.id)
+        }
+        for model in localModels {
+            let isLoaded = loadedModel?.id == model.id && selectedPeerModel == nil
+            models.append(AvailableModel(
+                id: "local-\(model.id)",
+                displayName: model.name,
+                source: .local(model),
+                isLoaded: isLoaded
+            ))
+            seenModelRepos.insert(model.huggingFaceRepo)
+        }
+
+        // WAN peer models (grouped by model, skip if already available locally)
+        if appState.wanEnabled {
+            var wanModelCounts: [String: Int] = [:]
+            for peer in appState.wanManager.state.connectedPeers {
+                for model in peer.loadedModels {
+                    wanModelCounts[model, default: 0] += 1
+                }
+            }
+            for (modelID, count) in wanModelCounts.sorted(by: { $0.value > $1.value }) {
+                guard !seenModelRepos.contains(modelID) else { continue }
+                let shortName = modelID.components(separatedBy: "/").last ?? modelID
+                models.append(AvailableModel(
+                    id: "wan-\(modelID)",
+                    displayName: shortName,
+                    source: .wan(modelID: modelID, deviceCount: count),
+                    isLoaded: selectedPeerModel == modelID
+                ))
             }
         }
-        return results
+
+        return models
     }
 
     var body: some View {
@@ -185,50 +221,41 @@ struct ChatView: View {
 
     @ViewBuilder
     private var modelPickerButton: some View {
+        let models = allAvailableModels
+
         Menu {
-            // Local models
-            if !availableModels.isEmpty {
-                Section("Local Models") {
-                    ForEach(availableModels) { model in
-                        Button {
+            if !models.isEmpty {
+                ForEach(models) { entry in
+                    Button {
+                        switch entry.source {
+                        case .local(let descriptor):
                             selectedPeerModel = nil
-                            Task { await switchModel(model) }
-                        } label: {
-                            HStack {
-                                Text(model.name)
-                                Text(model.parameterCount)
-                                    .foregroundStyle(.secondary)
-                                if loadedModel?.id == model.id && selectedPeerModel == nil {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
+                            Task { await switchModel(descriptor) }
+                        case .wan(let modelID, _):
+                            selectedPeerModel = modelID
                         }
-                        .disabled(loadedModel?.id == model.id && selectedPeerModel == nil)
-                    }
-                }
-            }
-
-            // WAN peer models
-            if !wanPeerModels.isEmpty {
-                Section("WAN Peers") {
-                    ForEach(wanPeerModels, id: \.model) { entry in
-                        Button {
-                            selectedPeerModel = entry.model
-                        } label: {
-                            HStack {
-                                Text(entry.model.components(separatedBy: "/").last ?? entry.model)
-                                Text("via \(entry.peerName)")
+                    } label: {
+                        HStack {
+                            switch entry.source {
+                            case .local:
+                                Label(entry.displayName, systemImage: "cpu")
+                                Text("Free")
                                     .foregroundStyle(.secondary)
-                                if selectedPeerModel == entry.model {
-                                    Image(systemName: "checkmark")
-                                }
+                            case .wan(_, let count):
+                                Label(entry.displayName, systemImage: "globe")
+                                Text("$")
+                                    .foregroundStyle(.orange)
+                                Text("\(count) device\(count == 1 ? "" : "s")")
+                                    .foregroundStyle(.secondary)
+                            }
+                            if entry.isLoaded {
+                                Image(systemName: "checkmark")
                             }
                         }
                     }
+                    .disabled(entry.isLoaded)
                 }
-            }
-
-            if availableModels.isEmpty && wanPeerModels.isEmpty {
+            } else {
                 Text("No models available")
             }
 
