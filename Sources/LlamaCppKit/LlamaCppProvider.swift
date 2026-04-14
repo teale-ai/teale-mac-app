@@ -108,6 +108,13 @@ public actor LlamaCppProvider: InferenceProvider {
             "--no-webui",
         ]
 
+        // Set library path so dylibs alongside the binary are found
+        let binaryDir = URL(fileURLWithPath: resolvedBinary).deletingLastPathComponent().path
+        var env = ProcessInfo.processInfo.environment
+        let existingPath = env["DYLD_LIBRARY_PATH"] ?? ""
+        env["DYLD_LIBRARY_PATH"] = existingPath.isEmpty ? binaryDir : "\(binaryDir):\(existingPath)"
+        process.environment = env
+
         // Silence server output by default
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
