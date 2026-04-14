@@ -62,6 +62,14 @@ let package = Package(
             ]
         ),
 
+        // MARK: - LlamaCppKit (llama.cpp subprocess + HTTP provider)
+        .target(
+            name: "LlamaCppKit",
+            dependencies: [
+                "SharedTypes",
+            ]
+        ),
+
         // MARK: - InferenceEngine (provider-agnostic — no MLX dependency)
         .target(
             name: "InferenceEngine",
@@ -156,6 +164,7 @@ let package = Package(
                 "SharedTypes",
                 "HardwareProfile",
                 "MLXInference",
+                "LlamaCppKit",
                 "InferenceEngine",
                 "ModelManager",
                 "LocalAPI",
@@ -190,6 +199,7 @@ let package = Package(
                 "HardwareProfile",
                 "InferenceEngine",
                 "ModelManager",
+                "LlamaCppKit",
                 "LocalAPI",
                 "ClusterKit",
                 "WANKit",

@@ -162,6 +162,21 @@ struct SettingsView: View {
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
+
+                if appState.inferenceBackend == .llamaCpp {
+                    HStack {
+                        Text("Binary Path")
+                        TextField("llama-server", text: Binding(
+                            get: { appState.llamaCppBinaryPath },
+                            set: { appState.llamaCppBinaryPath = $0 }
+                        ))
+                            .textFieldStyle(.roundedBorder)
+                    }
+
+                    Text("Path to llama-server binary. Install via Homebrew (`brew install llama.cpp`) or set an absolute path. Load a GGUF model from the Models tab.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
 
             // Connect Your Agent
