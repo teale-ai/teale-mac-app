@@ -100,4 +100,32 @@ public struct HardwareCapability: Codable, Sendable {
     public var availableRAMForModelsGB: Double {
         max(totalRAMGB - 4.0, 1.0)
     }
+
+    /// Estimated system power draw in watts during inference.
+    /// Based on Apple-published TDP and typical inference workload.
+    public var estimatedInferenceWatts: Double {
+        switch chipFamily {
+        case .m1:                   return 20
+        case .m1Pro:                return 30
+        case .m1Max:                return 40
+        case .m1Ultra:              return 60
+        case .m2:                   return 22
+        case .m2Pro:                return 35
+        case .m2Max:                return 45
+        case .m2Ultra:              return 65
+        case .m3:                   return 22
+        case .m3Pro:                return 36
+        case .m3Max:                return 48
+        case .m3Ultra:              return 70
+        case .m4:                   return 22
+        case .m4Pro:                return 38
+        case .m4Max:                return 50
+        case .m4Ultra:              return 75
+        case .a14, .a15:            return 5
+        case .a16, .a17Pro:         return 6
+        case .a18, .a18Pro:         return 7
+        case .a19Pro:               return 8
+        case .unknown:              return 30  // Conservative estimate
+        }
+    }
 }

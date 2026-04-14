@@ -179,6 +179,12 @@ public final class AppState {
             demandTracker.autoManageEnabled = autoManageModels
         }
     }
+    public var electricityCostPerKWh: Double = UserDefaults.standard.object(forKey: "teale.electricityCostPerKWh") as? Double ?? 0.12 {
+        didSet { UserDefaults.standard.set(electricityCostPerKWh, forKey: "teale.electricityCostPerKWh") }
+    }
+    public var electricityCurrency: String = UserDefaults.standard.string(forKey: "teale.electricityCurrency") ?? "USD" {
+        didSet { UserDefaults.standard.set(electricityCurrency, forKey: "teale.electricityCurrency") }
+    }
 
     private var isUpdatingWANToggle: Bool = false
 
