@@ -601,7 +601,21 @@ public final class WANManager: @unchecked Sendable {
         if let existing = connectedPeers[peer.nodeID] {
             let staleness = Date().timeIntervalSince(existing.lastHeartbeat)
             if staleness < 60 {
-                wanLog("  -> skip: already connected (heartbeat \(Int(staleness))s ago)")
+                // Update peer info if it was a placeholder from a race condition
+                // (connection arrived before discovery response)
+                let hasPlaceholderName = existing.peerInfo.displayName == "Unknown Peer"
+                let hasPlaceholderHardware = existing.peerInfo.capabilities.hardware.totalRAMGB == 0
+                if hasPlaceholderName || hasPlaceholderHardware {
+                    wanLog("  -> updating placeholder peer info for \(peer.displayName)")
+                    connectedPeers[peer.nodeID]?.peerInfo.displayName = peer.displayName
+                    connectedPeers[peer.nodeID]?.peerInfo.capabilities.hardware = peer.capabilities.hardware
+                    connectedPeers[peer.nodeID]?.peerInfo.capabilities.isAvailable = peer.capabilities.isAvailable
+                    connectedPeers[peer.nodeID]?.peerInfo.wgPublicKey = peer.wgPublicKey
+                    connectedPeers[peer.nodeID]?.peerInfo.organizationID = peer.organizationID
+                    updateState(mapping: state.publicEndpoint, natType: state.natType)
+                } else {
+                    wanLog("  -> skip: already connected (heartbeat \(Int(staleness))s ago)")
+                }
                 return
             }
             wanLog("  -> existing connection stale (\(Int(staleness))s), replacing")
@@ -700,6 +714,13 @@ public final class WANManager: @unchecked Sendable {
             connectedPeers[offer.fromNodeID] = connected
             startListening(to: connected)
             updateState(mapping: state.publicEndpoint, natType: state.natType)
+
+            // If we got a placeholder, trigger a discovery refresh so we learn about this peer sooner
+            if peerInfo.displayName == "Unknown Peer" {
+                Task { [weak self] in
+                    try? await self?.discoveryService?.refresh()
+                }
+            }
         } catch {
             // Failed to accept incoming connection
         }
@@ -743,6 +764,13 @@ public final class WANManager: @unchecked Sendable {
             connectedPeers[payload.fromNodeID] = connected
             startListening(to: connected)
             updateState(mapping: state.publicEndpoint, natType: state.natType)
+
+            // If we got a placeholder, trigger a discovery refresh so we learn about this peer sooner
+            if peerInfo.displayName == "Unknown Peer" {
+                Task { [weak self] in
+                    try? await self?.discoveryService?.refresh()
+                }
+            }
         } catch {
             await relay.closeRelayedSession(
                 sessionID: payload.sessionID,
