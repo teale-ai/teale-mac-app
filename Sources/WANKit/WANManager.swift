@@ -530,8 +530,17 @@ public final class WANManager: @unchecked Sendable {
         }
     }
 
+    /// Tracks which peers are being reconnected to prevent duplicate attempts.
+    private var reconnectingNodeIDs: Set<String> = []
+
     private func attemptReconnect(nodeID: String, maxAttempts: Int = 20) {
+        // Prevent duplicate reconnect tasks for the same peer
+        guard !reconnectingNodeIDs.contains(nodeID) else { return }
+        reconnectingNodeIDs.insert(nodeID)
+
         Task { [weak self] in
+            defer { self?.reconnectingNodeIDs.remove(nodeID) }
+
             var delay: TimeInterval = 3
             for attempt in 1...maxAttempts {
                 guard let self else { return }
@@ -542,6 +551,12 @@ public final class WANManager: @unchecked Sendable {
                 guard self.isEnabled, self.connectedPeers[nodeID] == nil else { return }
 
                 if let peerInfo = await self.discoveryService?.peer(byNodeID: nodeID) {
+                    // Use tiebreaker: only the higher nodeID initiates to avoid both sides racing
+                    if let config = self.config, config.identity.nodeID < peerInfo.nodeID {
+                        self.wanLog("Reconnect: \(peerInfo.displayName) has higher nodeID, waiting for them to initiate")
+                        // Still retry — if the other side doesn't initiate within backoff, we try
+                    }
+
                     do {
                         try await self.connectToPeer(peerInfo)
                         self.wanLog("Reconnected to \(peerInfo.displayName) on attempt \(attempt)")
@@ -686,7 +701,12 @@ public final class WANManager: @unchecked Sendable {
         guard connectedPeers[offer.fromNodeID] == nil else { return }
 
         do {
-            let connection = try await nat.handleIncomingOffer(offer: offer)
+            guard let connection = try await nat.handleIncomingOffer(offer: offer) else {
+                // Direct connection failed — the initiator will fall back to relay
+                // and send relayOpen, which handleIncomingRelayOpen will process.
+                wanLog("Direct connection from \(offer.fromNodeID.prefix(16))... failed, waiting for relay fallback")
+                return
+            }
 
             // Look up peer info from discovery
             let peerInfo = await discoveryService?.peer(byNodeID: offer.fromNodeID) ?? WANPeerInfo(
@@ -722,7 +742,7 @@ public final class WANManager: @unchecked Sendable {
                 }
             }
         } catch {
-            // Failed to accept incoming connection
+            wanLog("handleIncomingOffer error: \(error.localizedDescription)")
         }
     }
 
@@ -887,7 +907,11 @@ public final class WANManager: @unchecked Sendable {
                         self.connectedPeers[nodeID]?.consecutiveHeartbeatFailures = failures
                         self.wanLog("Heartbeat send failed to \(peer.peerInfo.displayName) (\(failures) consecutive): \(error.localizedDescription)")
 
-                        if failures >= 3 {
+                        // Be more tolerant during relay reconnection — the relay may be
+                        // re-establishing and heartbeat sends will fail temporarily.
+                        let relayReconnecting = await self.relayClient?.relayStatus == .reconnecting
+                        let maxFailures = relayReconnecting ? 12 : 3
+                        if failures >= maxFailures {
                             self.wanLog("Dropping \(peer.peerInfo.displayName) after \(failures) consecutive heartbeat failures")
                             await peer.connection.cancel()
                             self.connectedPeers.removeValue(forKey: nodeID)
