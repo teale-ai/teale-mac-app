@@ -1,6 +1,7 @@
 import Foundation
 import SharedTypes
 import LocalAPI
+import LlamaCppKit
 
 @MainActor
 final class RemoteControlBridge: @unchecked Sendable, LocalAppControlling {
@@ -51,6 +52,12 @@ final class RemoteControlBridge: @unchecked Sendable, LocalAppControlling {
     }
 
     func remoteLoadModel(_ request: RemoteModelControlRequest) async throws -> RemoteAppSnapshot {
+        // Check if this is a GGUF model request
+        if let ggufModel = resolveGGUFModel(request.model) {
+            await appState.loadGGUFModel(ggufModel)
+            return await remoteSnapshot()
+        }
+
         let model = try resolveModel(request.model)
         let isDownloaded = await appState.modelManager.isDownloaded(model)
 
@@ -120,6 +127,16 @@ final class RemoteControlBridge: @unchecked Sendable, LocalAppControlling {
             return model
         }
         throw RemoteControlError.modelNotFound(value)
+    }
+
+    private func resolveGGUFModel(_ value: String) -> GGUFModelInfo? {
+        appState.scanLocalModels()
+        return appState.scannedGGUFModels.first(where: {
+            $0.filename == value
+            || "gguf-\($0.filename)" == value
+            || $0.path.path == value
+            || $0.path.lastPathComponent == value
+        })
     }
 
     private func downloadModel(_ descriptor: ModelDescriptor) async throws {
