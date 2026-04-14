@@ -135,10 +135,12 @@ public actor NATTraversal {
         }
     }
 
-    /// Handle an incoming connection offer (called when we receive an offer from relay)
+    /// Handle an incoming connection offer (called when we receive an offer from relay).
+    /// Returns nil if direct connection fails — the initiator will fall back to relay
+    /// and our WANManager will accept via handleIncomingRelayOpen.
     public func handleIncomingOffer(
         offer: RelayMessage.OfferPayload
-    ) async throws -> WireGuardPeerConnection {
+    ) async throws -> WireGuardPeerConnection? {
         // Discover our public endpoint (non-fatal — we can still use relay)
         var localMapping: NATMapping? = nil
         var localNATType: NATType = .unknown
@@ -172,7 +174,9 @@ public actor NATTraversal {
             throw WANError.invalidPublicKey
         }
 
-        // Attempt direct connection to offerer
+        // Attempt direct connection to offerer (best-effort).
+        // If direct fails, the initiator will fall back to relay (relayOpen)
+        // which our WANManager will accept via handleIncomingRelayOpen.
         if localMapping?.publicIP == offer.connectionInfo.publicIP,
            let localIP = offer.connectionInfo.localIP,
            let localPort = offer.connectionInfo.localPort {
@@ -188,14 +192,18 @@ public actor NATTraversal {
             }
         }
 
-        let peerConnection = try await attemptDirectConnection(
-            toHost: offer.connectionInfo.publicIP,
-            port: offer.connectionInfo.publicPort,
-            remoteNodeID: offer.fromNodeID,
-            remoteWGPublicKey: remoteWGKey
-        )
-
-        return peerConnection
+        do {
+            return try await attemptDirectConnection(
+                toHost: offer.connectionInfo.publicIP,
+                port: offer.connectionInfo.publicPort,
+                remoteNodeID: offer.fromNodeID,
+                remoteWGPublicKey: remoteWGKey
+            )
+        } catch {
+            // Direct failed — initiator will open relay session instead
+            FileHandle.standardError.write(Data("[WAN] handleIncomingOffer: direct connection failed for \(offer.fromNodeID.prefix(16))..., waiting for relay fallback\n".utf8))
+            return nil
+        }
     }
 
     // MARK: - Private
