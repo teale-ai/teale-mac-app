@@ -228,12 +228,8 @@ private struct WANPeersSection: View {
 private struct WANModelCard: View {
     let model: WANModelAvailability
 
-    /// Shorten "mlx-community/Qwen3-32B-4bit" to "Qwen3-32B-4bit"
     private var shortModelName: String {
-        if let slash = model.modelID.lastIndex(of: "/") {
-            return String(model.modelID[model.modelID.index(after: slash)...])
-        }
-        return model.modelID
+        cleanModelDisplayName(model.modelID)
     }
 
     private var hardwareSummary: String {
