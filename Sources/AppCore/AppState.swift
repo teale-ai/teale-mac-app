@@ -134,6 +134,9 @@ public final class AppState {
     public var loadingProgress: Double?
     public var pendingWalletTransferPeerID: UUID?
 
+    // Auto-updater
+    public let updateChecker = UpdateChecker()
+
     // Settings
     public var launchAtLogin: Bool = false
     public var inferenceBackend: InferenceBackend = InferenceBackend(

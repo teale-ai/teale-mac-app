@@ -399,6 +399,26 @@ struct SettingsView: View {
                 LabeledContent(appState.loc("settings.version"), value: displayVersion)
                 LabeledContent(appState.loc("settings.engine"), value: appState.inferenceEngineName)
                 Link(appState.loc("settings.sourceCode"), destination: URL(string: "https://github.com/taylorhou/teale-mac-app")!)
+
+                if appState.updateChecker.updateAvailable, let tag = appState.updateChecker.latestTag {
+                    HStack {
+                        Label("Update available: \(tag)", systemImage: "arrow.down.circle.fill")
+                            .foregroundStyle(.green)
+                        Spacer()
+                        Button("Update") {
+                            Task { await appState.updateChecker.installUpdate() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                        Button("Skip") {
+                            appState.updateChecker.dismissUpdate()
+                        }
+                    }
+                }
+                Button(appState.updateChecker.checking ? "Checking..." : "Check for Updates") {
+                    Task { await appState.updateChecker.check() }
+                }
+                .disabled(appState.updateChecker.checking)
             }
 
             // Quit
