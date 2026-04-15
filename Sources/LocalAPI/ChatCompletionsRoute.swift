@@ -26,12 +26,12 @@ enum ChatCompletionsRoute {
                 return try await handleNonStreaming(request: chatRequest, engine: engine, onCompleted: onCompleted)
             }
         } catch {
-            if isNoModelAvailableError(error) {
-                let error = APIErrorResponse(
-                    message: "No model is available locally or on connected peers.",
+            if isModelError(error) {
+                let errorResponse = APIErrorResponse(
+                    message: error.localizedDescription,
                     type: "invalid_request_error"
                 )
-                let data = try JSONEncoder().encode(error)
+                let data = try JSONEncoder().encode(errorResponse)
                 return Response(
                     status: .badRequest,
                     headers: [.contentType: "application/json"],
@@ -96,7 +96,7 @@ enum ChatCompletionsRoute {
         )
     }
 
-    private static func isNoModelAvailableError(_ error: Error) -> Bool {
+    private static func isModelError(_ error: Error) -> Bool {
         let message: String
         if let localizedError = error as? LocalizedError,
            let description = localizedError.errorDescription {
@@ -107,5 +107,6 @@ enum ChatCompletionsRoute {
 
         return message.localizedCaseInsensitiveContains("no model")
             || message.localizedCaseInsensitiveContains("no wan peer")
+            || message.localizedCaseInsensitiveContains("not available")
     }
 }
