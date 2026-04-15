@@ -28,10 +28,13 @@ public actor PTNStore {
             return []
         }
 
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
         var memberships: [PTNMembershipInfo] = []
         for file in files where file.pathExtension == "json" {
             guard let data = try? Data(contentsOf: file),
-                  let membership = try? JSONDecoder().decode(PTNMembershipInfo.self, from: data) else {
+                  let membership = try? decoder.decode(PTNMembershipInfo.self, from: data) else {
                 continue
             }
             memberships.append(membership)

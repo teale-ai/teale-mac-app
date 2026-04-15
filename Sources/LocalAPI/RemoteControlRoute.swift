@@ -114,6 +114,47 @@ enum RemoteControlRoute {
         }
     }
 
+    static func issuePTNCert(request: Request, controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        do {
+            let body = try await request.body.collect(upTo: 1_048_576)
+            struct IssueCertRequest: Decodable {
+                var ptn_id: String
+                var node_id: String
+                var role: String?
+            }
+            let payload = try JSONDecoder().decode(IssueCertRequest.self, from: body)
+            let certData = try await controller.remoteIssuePTNCert(
+                ptnID: payload.ptn_id,
+                nodeID: payload.node_id,
+                role: payload.role ?? "provider"
+            )
+            // Return the raw cert JSON so it can be passed directly to join-with-cert
+            return Response(
+                status: .ok,
+                headers: [.contentType: "application/json"],
+                body: .init(byteBuffer: .init(data: certData))
+            )
+        } catch {
+            return errorResponse(message: error.localizedDescription)
+        }
+    }
+
+    static func joinPTNWithCert(request: Request, controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        do {
+            let body = try await request.body.collect(upTo: 1_048_576)
+            let ptn = try await controller.remoteJoinPTNWithCert(certData: Data(buffer: body))
+            return try jsonResponse(ptn)
+        } catch {
+            return errorResponse(message: error.localizedDescription)
+        }
+    }
+
     private static func jsonResponse<T: Encodable>(_ value: T) throws -> Response {
         let data = try JSONEncoder().encode(value)
         return Response(
