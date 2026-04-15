@@ -46,7 +46,14 @@ final class RemoteControlBridge: @unchecked Sendable, LocalAppControlling {
                 maxStorageGB: appState.maxStorageGB,
                 orgCapacityReservation: appState.clusterManager.orgCapacityReservation,
                 clusterPasscodeSet: appState.clusterManager.passcode?.isEmpty == false,
-                allowNetworkAccess: appState.allowNetworkAccess
+                allowNetworkAccess: appState.allowNetworkAccess,
+                electricityCostPerKWh: appState.electricityCostPerKWh,
+                electricityCurrency: appState.electricityCurrency,
+                electricityMarginMultiplier: appState.electricityMarginMultiplier,
+                keepAwake: appState.keepAwake,
+                autoManageModels: appState.autoManageModels,
+                inferenceBackend: appState.inferenceBackend.rawValue,
+                language: appState.language.rawValue
             ),
             models: models
         )
@@ -116,8 +123,52 @@ final class RemoteControlBridge: @unchecked Sendable, LocalAppControlling {
 
         if let wanEnabled = update.wanEnabled {
             appState.wanEnabled = wanEnabled
-            // enableWAN() fires an async Task internally; we return immediately
-            // and the caller can poll GET /v1/app to check wanBusy/wanLastError.
+        }
+
+        if let allowNetworkAccess = update.allowNetworkAccess {
+            appState.allowNetworkAccess = allowNetworkAccess
+        }
+
+        if let cost = update.electricityCostPerKWh {
+            guard cost >= 0 else {
+                throw RemoteControlError.invalidSetting("electricity_cost must be >= 0")
+            }
+            appState.electricityCostPerKWh = cost
+        }
+
+        if let currency = update.electricityCurrency {
+            appState.electricityCurrency = currency
+        }
+
+        if let margin = update.electricityMarginMultiplier {
+            guard margin >= 0 else {
+                throw RemoteControlError.invalidSetting("electricity_margin must be >= 0")
+            }
+            appState.electricityMarginMultiplier = margin
+        }
+
+        if let keepAwake = update.keepAwake {
+            appState.keepAwake = keepAwake
+        }
+
+        if let autoManage = update.autoManageModels {
+            appState.autoManageModels = autoManage
+        }
+
+        if let backend = update.inferenceBackend {
+            guard let value = InferenceBackend(rawValue: backend) else {
+                let valid = InferenceBackend.allCases.map(\.rawValue).joined(separator: ", ")
+                throw RemoteControlError.invalidSetting("inference_backend must be one of: \(valid)")
+            }
+            appState.inferenceBackend = value
+        }
+
+        if let lang = update.language {
+            guard let value = AppLanguage(rawValue: lang) else {
+                let valid = AppLanguage.allCases.map(\.rawValue).joined(separator: ", ")
+                throw RemoteControlError.invalidSetting("language must be one of: \(valid)")
+            }
+            appState.language = value
         }
 
         return await remoteSnapshot()
@@ -227,7 +278,6 @@ final class RemoteControlBridge: @unchecked Sendable, LocalAppControlling {
             validForSeconds: 3600
         )
         let response = try await appState.ptnManager.handleJoinRequest(request)
-        // Return the full join response as JSON (contains cert + ptnName + caPublicKey)
         return try JSONEncoder().encode(response)
     }
 
@@ -240,6 +290,110 @@ final class RemoteControlBridge: @unchecked Sendable, LocalAppControlling {
             role: membership.role.rawValue,
             isCreator: membership.isCreator
         )
+    }
+
+    func remoteLeavePTN(ptnID: String) async throws {
+        try await appState.ptnManager.leavePTN(ptnID: ptnID)
+    }
+
+    // MARK: - API Keys
+
+    func remoteListAPIKeys() async -> [RemoteAPIKeySnapshot] {
+        let keys = await appState.apiKeyStore.allKeys()
+        return keys.map { k in
+            RemoteAPIKeySnapshot(
+                id: k.id,
+                key: k.truncatedKey,
+                name: k.name,
+                createdAt: k.createdAt,
+                lastUsedAt: k.lastUsedAt,
+                isActive: k.isActive
+            )
+        }
+    }
+
+    func remoteGenerateAPIKey(name: String) async -> RemoteAPIKeySnapshot {
+        let k = await appState.apiKeyStore.generateKey(name: name)
+        return RemoteAPIKeySnapshot(
+            id: k.id,
+            key: k.key,
+            name: k.name,
+            createdAt: k.createdAt,
+            lastUsedAt: k.lastUsedAt,
+            isActive: k.isActive
+        )
+    }
+
+    func remoteRevokeAPIKey(id: UUID) async {
+        await appState.apiKeyStore.revokeKey(id: id)
+    }
+
+    // MARK: - Wallet
+
+    func remoteWalletBalance() async -> RemoteWalletSnapshot {
+        await appState.wallet.refreshBalance()
+        return RemoteWalletSnapshot(
+            balance: appState.wallet.balance.value,
+            totalEarned: appState.wallet.totalEarned.value,
+            totalSpent: appState.wallet.totalSpent.value
+        )
+    }
+
+    func remoteWalletTransactions(limit: Int) async -> [RemoteTransactionSnapshot] {
+        await appState.wallet.refreshBalance()
+        return appState.wallet.recentTransactions.prefix(limit).map { tx in
+            RemoteTransactionSnapshot(
+                id: tx.id,
+                type: tx.type.rawValue,
+                amount: tx.amount.value,
+                description: tx.description,
+                peerNodeID: tx.peerNodeID,
+                timestamp: tx.timestamp
+            )
+        }
+    }
+
+    func remoteWalletSend(amount: Double, toPeer peerNodeID: String, memo: String?) async throws -> Bool {
+        guard let peerUUID = UUID(uuidString: peerNodeID) else {
+            throw RemoteControlError.invalidSetting("Invalid peer UUID: \(peerNodeID)")
+        }
+        return await appState.sendCredits(amount: amount, to: peerUUID, memo: memo)
+    }
+
+    func remoteSolanaStatus() async -> RemoteSolanaSnapshot {
+        guard let bridge = appState.walletBridge else {
+            return RemoteSolanaSnapshot(enabled: appState.solanaWalletEnabled, network: appState.solanaNetwork)
+        }
+        return RemoteSolanaSnapshot(
+            enabled: appState.solanaWalletEnabled,
+            address: bridge.solanaAddress,
+            usdcBalance: bridge.usdcBalanceFormatted,
+            network: appState.solanaNetwork
+        )
+    }
+
+    // MARK: - Peers
+
+    func remoteListPeers() async -> RemotePeersSnapshot {
+        let wanPeers = appState.wanManager.state.connectedPeers.map { peer in
+            RemotePeerSnapshot(
+                nodeID: peer.id,
+                displayName: peer.displayName,
+                loadedModels: peer.loadedModels,
+                source: "wan"
+            )
+        }
+
+        let clusterPeers = await appState.clusterManager.topology.connectedPeers.map { peer in
+            RemotePeerSnapshot(
+                nodeID: peer.id.uuidString,
+                displayName: peer.deviceInfo.name,
+                loadedModels: peer.loadedModels,
+                source: "cluster"
+            )
+        }
+
+        return RemotePeersSnapshot(wanPeers: wanPeers, clusterPeers: clusterPeers)
     }
 
     private func appVersion() -> String {

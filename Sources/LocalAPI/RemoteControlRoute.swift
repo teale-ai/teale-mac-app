@@ -131,7 +131,6 @@ enum RemoteControlRoute {
                 nodeID: payload.node_id,
                 role: payload.role ?? "provider"
             )
-            // Return the raw cert JSON so it can be passed directly to join-with-cert
             return Response(
                 status: .ok,
                 headers: [.contentType: "application/json"],
@@ -153,6 +152,136 @@ enum RemoteControlRoute {
         } catch {
             return errorResponse(message: error.localizedDescription)
         }
+    }
+
+    // MARK: - PTN Leave
+
+    static func leavePTN(request: Request, controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        do {
+            let body = try await request.body.collect(upTo: 1_048_576)
+            struct LeaveRequest: Decodable { var ptn_id: String }
+            let payload = try JSONDecoder().decode(LeaveRequest.self, from: body)
+            try await controller.remoteLeavePTN(ptnID: payload.ptn_id)
+            struct OKResponse: Encodable { var ok: Bool }
+            return try jsonResponse(OKResponse(ok: true))
+        } catch {
+            return errorResponse(message: error.localizedDescription)
+        }
+    }
+
+    // MARK: - API Key Routes
+
+    static func listAPIKeys(controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let keys = await controller.remoteListAPIKeys()
+        let data = try encoder.encode(keys)
+        return Response(
+            status: .ok,
+            headers: [.contentType: "application/json"],
+            body: .init(byteBuffer: .init(data: data))
+        )
+    }
+
+    static func generateAPIKey(request: Request, controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        do {
+            let body = try await request.body.collect(upTo: 1_048_576)
+            struct GenerateRequest: Decodable { var name: String }
+            let payload = try JSONDecoder().decode(GenerateRequest.self, from: body)
+            let key = await controller.remoteGenerateAPIKey(name: payload.name)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(key)
+            return Response(
+                status: .ok,
+                headers: [.contentType: "application/json"],
+                body: .init(byteBuffer: .init(data: data))
+            )
+        } catch {
+            return errorResponse(message: error.localizedDescription)
+        }
+    }
+
+    static func revokeAPIKey(request: Request, controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        do {
+            let body = try await request.body.collect(upTo: 1_048_576)
+            struct RevokeRequest: Decodable { var id: UUID }
+            let payload = try JSONDecoder().decode(RevokeRequest.self, from: body)
+            await controller.remoteRevokeAPIKey(id: payload.id)
+            struct OKResponse: Encodable { var ok: Bool }
+            return try jsonResponse(OKResponse(ok: true))
+        } catch {
+            return errorResponse(message: error.localizedDescription)
+        }
+    }
+
+    // MARK: - Wallet Routes
+
+    static func walletBalance(controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        return try jsonResponse(await controller.remoteWalletBalance())
+    }
+
+    static func walletTransactions(request: Request, controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        let limit = request.uri.queryParameters["limit"].flatMap { Int($0) } ?? 20
+        let transactions = await controller.remoteWalletTransactions(limit: limit)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(transactions)
+        return Response(
+            status: .ok,
+            headers: [.contentType: "application/json"],
+            body: .init(byteBuffer: .init(data: data))
+        )
+    }
+
+    static func walletSend(request: Request, controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        do {
+            let body = try await request.body.collect(upTo: 1_048_576)
+            struct SendRequest: Decodable { var amount: Double; var peer_id: String; var memo: String? }
+            let payload = try JSONDecoder().decode(SendRequest.self, from: body)
+            let success = try await controller.remoteWalletSend(amount: payload.amount, toPeer: payload.peer_id, memo: payload.memo)
+            struct SendResponse: Encodable { var success: Bool }
+            return try jsonResponse(SendResponse(success: success))
+        } catch {
+            return errorResponse(message: error.localizedDescription)
+        }
+    }
+
+    static func solanaStatus(controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        return try jsonResponse(await controller.remoteSolanaStatus())
+    }
+
+    // MARK: - Peers Routes
+
+    static func listPeers(controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        return try jsonResponse(await controller.remoteListPeers())
     }
 
     private static func jsonResponse<T: Encodable>(_ value: T) throws -> Response {

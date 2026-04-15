@@ -33,6 +33,86 @@ struct TealeClient {
         try await post("/v1/app/models/unload")
     }
 
+    // MARK: - Settings
+
+    func updateSettings(_ update: RemoteSettingsUpdate) async throws -> RemoteAppSnapshot {
+        try await patch("/v1/app/settings", body: update)
+    }
+
+    // MARK: - PTN
+
+    func listPTNs() async throws -> [RemotePTNSnapshot] {
+        try await get("/v1/app/ptn")
+    }
+
+    func createPTN(name: String) async throws -> RemotePTNSnapshot {
+        struct Body: Encodable { var name: String }
+        return try await post("/v1/app/ptn/create", body: Body(name: name))
+    }
+
+    func invitePTN(ptnID: String) async throws -> String {
+        struct Body: Encodable { var ptn_id: String }
+        struct Resp: Decodable { var invite_code: String }
+        let resp: Resp = try await post("/v1/app/ptn/invite", body: Body(ptn_id: ptnID))
+        return resp.invite_code
+    }
+
+    func leavePTN(ptnID: String) async throws {
+        struct Body: Encodable { var ptn_id: String }
+        struct Resp: Decodable { var ok: Bool }
+        let _: Resp = try await post("/v1/app/ptn/leave", body: Body(ptn_id: ptnID))
+    }
+
+    // MARK: - API Keys
+
+    func listAPIKeys() async throws -> [RemoteAPIKeySnapshot] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try await get("/v1/app/apikeys", decoder: decoder)
+    }
+
+    func generateAPIKey(name: String) async throws -> RemoteAPIKeySnapshot {
+        struct Body: Encodable { var name: String }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try await post("/v1/app/apikeys", body: Body(name: name), decoder: decoder)
+    }
+
+    func revokeAPIKey(id: UUID) async throws {
+        struct Body: Encodable { var id: UUID }
+        struct Resp: Decodable { var ok: Bool }
+        let _: Resp = try await post("/v1/app/apikeys/revoke", body: Body(id: id))
+    }
+
+    // MARK: - Wallet
+
+    func walletBalance() async throws -> RemoteWalletSnapshot {
+        try await get("/v1/app/wallet")
+    }
+
+    func walletTransactions(limit: Int = 20) async throws -> [RemoteTransactionSnapshot] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try await get("/v1/app/wallet/transactions?limit=\(limit)", decoder: decoder)
+    }
+
+    func walletSend(amount: Double, peerID: String, memo: String? = nil) async throws -> Bool {
+        struct Body: Encodable { var amount: Double; var peer_id: String; var memo: String? }
+        struct Resp: Decodable { var success: Bool }
+        let resp: Resp = try await post("/v1/app/wallet/send", body: Body(amount: amount, peer_id: peerID, memo: memo))
+        return resp.success
+    }
+
+    func solanaStatus() async throws -> RemoteSolanaSnapshot {
+        try await get("/v1/app/wallet/solana")
+    }
+
+    // MARK: - Peers
+
+    func listPeers() async throws -> RemotePeersSnapshot {
+        try await get("/v1/app/peers")
+    }
+
     // MARK: - Chat
 
     func chatStream(prompt: String, model: String?) async throws -> URLSession.AsyncBytes {
@@ -67,14 +147,14 @@ struct TealeClient {
 
     // MARK: - Helpers
 
-    private func get<T: Decodable>(_ path: String) async throws -> T {
+    private func get<T: Decodable>(_ path: String, decoder: JSONDecoder = JSONDecoder()) async throws -> T {
         var request = URLRequest(url: baseURL.appending(path: path))
         if let apiKey {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         }
         let (data, response) = try await URLSession.shared.data(for: request)
         try checkHTTP(response)
-        return try JSONDecoder().decode(T.self, from: data)
+        return try decoder.decode(T.self, from: data)
     }
 
     private func post<T: Decodable>(_ path: String) async throws -> T {
@@ -89,9 +169,22 @@ struct TealeClient {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
-    private func post<B: Encodable, T: Decodable>(_ path: String, body: B) async throws -> T {
+    private func post<B: Encodable, T: Decodable>(_ path: String, body: B, decoder: JSONDecoder = JSONDecoder()) async throws -> T {
         var request = URLRequest(url: baseURL.appending(path: path))
         request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let apiKey {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try JSONEncoder().encode(body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try checkHTTP(response)
+        return try decoder.decode(T.self, from: data)
+    }
+
+    private func patch<B: Encodable, T: Decodable>(_ path: String, body: B) async throws -> T {
+        var request = URLRequest(url: baseURL.appending(path: path))
+        request.httpMethod = "PATCH"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let apiKey {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
