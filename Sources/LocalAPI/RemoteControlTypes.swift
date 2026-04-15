@@ -7,6 +7,25 @@ public protocol LocalAppControlling: AnyObject {
     func remoteDownloadModel(_ request: RemoteModelControlRequest) async throws -> RemoteAppSnapshot
     func remoteUnloadModel() async -> RemoteAppSnapshot
     func remoteUpdateSettings(_ update: RemoteSettingsUpdate) async throws -> RemoteAppSnapshot
+    func remoteListPTNs() async -> [RemotePTNSnapshot]
+    func remoteCreatePTN(name: String) async throws -> RemotePTNSnapshot
+    func remoteGeneratePTNInvite(ptnID: String) async throws -> String
+}
+
+public struct RemotePTNSnapshot: Codable, Sendable {
+    public var ptnID: String
+    public var ptnName: String
+    public var role: String
+    public var isCreator: Bool
+    public var memberCount: Int
+
+    public init(ptnID: String, ptnName: String, role: String, isCreator: Bool, memberCount: Int = 1) {
+        self.ptnID = ptnID
+        self.ptnName = ptnName
+        self.role = role
+        self.isCreator = isCreator
+        self.memberCount = memberCount
+    }
 }
 
 public struct RemoteAppSnapshot: Codable, Sendable {

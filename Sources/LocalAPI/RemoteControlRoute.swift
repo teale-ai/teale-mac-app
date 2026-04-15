@@ -74,6 +74,46 @@ enum RemoteControlRoute {
         }
     }
 
+    // MARK: - PTN Routes
+
+    static func listPTNs(controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        return try jsonResponse(await controller.remoteListPTNs())
+    }
+
+    static func createPTN(request: Request, controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        do {
+            let body = try await request.body.collect(upTo: 1_048_576)
+            struct CreateRequest: Decodable { var name: String }
+            let payload = try JSONDecoder().decode(CreateRequest.self, from: body)
+            let ptn = try await controller.remoteCreatePTN(name: payload.name)
+            return try jsonResponse(ptn)
+        } catch {
+            return errorResponse(message: error.localizedDescription)
+        }
+    }
+
+    static func generatePTNInvite(request: Request, controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        do {
+            let body = try await request.body.collect(upTo: 1_048_576)
+            struct InviteRequest: Decodable { var ptn_id: String }
+            let payload = try JSONDecoder().decode(InviteRequest.self, from: body)
+            let code = try await controller.remoteGeneratePTNInvite(ptnID: payload.ptn_id)
+            struct InviteResponse: Encodable { var invite_code: String }
+            return try jsonResponse(InviteResponse(invite_code: code))
+        } catch {
+            return errorResponse(message: error.localizedDescription)
+        }
+    }
+
     private static func jsonResponse<T: Encodable>(_ value: T) throws -> Response {
         let data = try JSONEncoder().encode(value)
         return Response(

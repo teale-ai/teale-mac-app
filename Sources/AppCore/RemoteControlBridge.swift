@@ -184,6 +184,33 @@ final class RemoteControlBridge: @unchecked Sendable, LocalAppControlling {
         }
     }
 
+    // MARK: - PTN
+
+    func remoteListPTNs() async -> [RemotePTNSnapshot] {
+        appState.ptnManager.memberships.map { m in
+            RemotePTNSnapshot(
+                ptnID: m.ptnID,
+                ptnName: m.ptnName,
+                role: m.role.rawValue,
+                isCreator: m.isCreator
+            )
+        }
+    }
+
+    func remoteCreatePTN(name: String) async throws -> RemotePTNSnapshot {
+        let membership = try await appState.ptnManager.createPTN(name: name)
+        return RemotePTNSnapshot(
+            ptnID: membership.ptnID,
+            ptnName: membership.ptnName,
+            role: membership.role.rawValue,
+            isCreator: membership.isCreator
+        )
+    }
+
+    func remoteGeneratePTNInvite(ptnID: String) async throws -> String {
+        try appState.ptnManager.generateInviteToken(ptnID: ptnID)
+    }
+
     private func appVersion() -> String {
         BuildVersion.display
     }
