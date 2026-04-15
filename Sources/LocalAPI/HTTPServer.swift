@@ -8,6 +8,9 @@ import InferenceEngine
 /// Returns model IDs available on connected peers (WAN + cluster).
 public typealias PeerModelProvider = @Sendable () async -> [(id: String, ownedBy: String)]
 
+/// Called when a chat completion request finishes with the number of tokens generated.
+public typealias RequestCompletedHandler = @Sendable (Int) async -> Void
+
 public actor LocalHTTPServer {
     private let engine: InferenceEngineManager
     public let port: Int
@@ -15,6 +18,7 @@ public actor LocalHTTPServer {
     private let allowNetworkAccess: Bool
     private let controller: (any LocalAppControlling)?
     private let peerModelProvider: PeerModelProvider?
+    private let onRequestCompleted: RequestCompletedHandler?
 
     public init(
         engine: InferenceEngineManager,
@@ -22,7 +26,8 @@ public actor LocalHTTPServer {
         apiKeyStore: APIKeyStore = APIKeyStore(),
         allowNetworkAccess: Bool = false,
         controller: (any LocalAppControlling)? = nil,
-        peerModelProvider: PeerModelProvider? = nil
+        peerModelProvider: PeerModelProvider? = nil,
+        onRequestCompleted: RequestCompletedHandler? = nil
     ) {
         self.engine = engine
         self.port = port
@@ -30,6 +35,7 @@ public actor LocalHTTPServer {
         self.allowNetworkAccess = allowNetworkAccess
         self.controller = controller
         self.peerModelProvider = peerModelProvider
+        self.onRequestCompleted = onRequestCompleted
     }
 
     public func start() async throws {
@@ -38,6 +44,7 @@ public actor LocalHTTPServer {
         let requireAuth = self.allowNetworkAccess
         let controller = self.controller
         let peerModels = self.peerModelProvider
+        let requestCompleted = self.onRequestCompleted
 
         let router = Router()
 
@@ -67,7 +74,7 @@ public actor LocalHTTPServer {
 
         // Chat completions endpoint
         router.post("/v1/chat/completions") { request, _ -> Response in
-            return try await ChatCompletionsRoute.handle(request: request, engine: engine)
+            return try await ChatCompletionsRoute.handle(request: request, engine: engine, onCompleted: requestCompleted)
         }
 
         // Remote control endpoints

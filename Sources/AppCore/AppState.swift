@@ -135,6 +135,10 @@ public final class AppState {
     public let ggufScanner = GGUFScanner()
     public var scannedGGUFModels: [GGUFModelInfo] = []
 
+    // Stats (all network tiers)
+    public var totalRequestsServed: Int = 0
+    public var totalTokensGenerated: Int = 0
+
     // Server & API Keys
     public var serverPort: Int = 11435
     public var isServerRunning: Bool = false
@@ -369,16 +373,23 @@ public final class AppState {
             clusterManager.beginServingInference()
             defer { clusterManager.endServingInference() }
 
+            var tokenCount = 0
             do {
                 let provider = self.currentServingProvider()
                 let stream = provider.generate(request: payload.request)
                 for try await chunk in stream {
+                    tokenCount += 1
                     let response = InferenceChunkPayload(requestID: payload.requestID, chunk: chunk)
                     try await peer.connection.send(.inferenceChunk(response))
                 }
 
                 let complete = InferenceCompletePayload(requestID: payload.requestID)
                 try await peer.connection.send(.inferenceComplete(complete))
+
+                await MainActor.run {
+                    self.totalRequestsServed += 1
+                    self.totalTokensGenerated += tokenCount
+                }
             } catch {
                 let response = InferenceErrorPayload(
                     requestID: payload.requestID,
@@ -400,6 +411,7 @@ public final class AppState {
                 source = .wwtn
             }
 
+            var tokenCount = 0
             do {
                 // Queue the request — suspends until the scheduler grants a slot
                 try await self.requestScheduler.enqueue(
@@ -411,6 +423,7 @@ public final class AppState {
                 let provider = self.currentServingProvider()
                 let stream = provider.generate(request: payload.request)
                 for try await chunk in stream {
+                    tokenCount += 1
                     let response = InferenceChunkPayload(requestID: payload.requestID, chunk: chunk)
                     try await connection.send(.inferenceChunk(response))
                 }
@@ -420,6 +433,11 @@ public final class AppState {
 
                 // Release the scheduler slot
                 await self.requestScheduler.complete()
+
+                await MainActor.run {
+                    self.totalRequestsServed += 1
+                    self.totalTokensGenerated += tokenCount
+                }
             } catch {
                 await self.requestScheduler.complete()
                 let response = InferenceErrorPayload(
@@ -843,6 +861,12 @@ public final class AppState {
                     }
                 }
                 return models
+            },
+            onRequestCompleted: { [weak self] tokenCount in
+                await MainActor.run {
+                    self?.totalRequestsServed += 1
+                    self?.totalTokensGenerated += tokenCount
+                }
             }
         )
         Task.detached {
