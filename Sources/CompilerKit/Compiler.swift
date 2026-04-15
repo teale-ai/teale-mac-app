@@ -108,7 +108,7 @@ public actor Compiler: InferenceProvider {
     }
 
     public func generateFull(request: ChatCompletionRequest) async throws -> ChatCompletionResponse {
-        let routedRequest = smartRoute(request)
+        let routedRequest = try validateAndRoute(request)
 
         let shouldCompile = analyzer.shouldCompile(
             request: routedRequest,
@@ -133,15 +133,27 @@ public actor Compiler: InferenceProvider {
     // MARK: - Smart Routing
 
     /// When the user doesn't specify a model, pick the best one for passthrough.
-    /// When a model is explicitly set, respect the user's choice.
-    private func smartRoute(_ request: ChatCompletionRequest) -> ChatCompletionRequest {
-        // User explicitly chose a model — respect it
-        guard request.model == nil else { return request }
+    /// When a model is explicitly set, validate it's available.
+    private func validateAndRoute(_ request: ChatCompletionRequest) throws -> ChatCompletionRequest {
+        if let requestedModel = request.model {
+            // User explicitly chose a model — verify it's actually available
+            if !availableModels.isEmpty {
+                let found = availableModels.contains { $0.model == requestedModel }
+                if !found {
+                    let available = Set(availableModels.map(\.model)).sorted()
+                    throw CompilationError.modelNotAvailable(
+                        requested: requestedModel,
+                        available: available
+                    )
+                }
+            }
+            // Model found (or no model list yet) — pass through
+            return request
+        }
 
-        // No models on network — let the chain handle it normally
+        // No model specified — pick the best one automatically
         guard !availableModels.isEmpty else { return request }
 
-        // Pick the best single model for a general task
         let generalTask = SubTask(
             prompt: "",
             category: .general,
@@ -266,7 +278,7 @@ public actor Compiler: InferenceProvider {
         request: ChatCompletionRequest,
         continuation: AsyncThrowingStream<ChatCompletionChunk, Error>.Continuation
     ) async throws {
-        let routedRequest = smartRoute(request)
+        let routedRequest = try validateAndRoute(request)
 
         let shouldCompile = analyzer.shouldCompile(
             request: routedRequest,

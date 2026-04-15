@@ -164,6 +164,7 @@ public enum CompilationError: LocalizedError, Sendable {
     case subTaskFailed(subTaskID: UUID, error: String)
     case synthesisFailed(String)
     case allCandidatesFailed
+    case modelNotAvailable(requested: String, available: [String])
 
     public var errorDescription: String? {
         switch self {
@@ -172,6 +173,9 @@ public enum CompilationError: LocalizedError, Sendable {
         case .subTaskFailed(_, let error): return "Sub-task failed: \(error)"
         case .synthesisFailed(let reason): return "Synthesis failed: \(reason)"
         case .allCandidatesFailed: return "All candidate models failed"
+        case .modelNotAvailable(let requested, let available):
+            let list = available.isEmpty ? "none" : available.joined(separator: ", ")
+            return "Model '\(requested)' is not available. Available models: \(list)"
         }
     }
 }
