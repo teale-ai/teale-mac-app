@@ -264,9 +264,28 @@ public final class PTNManager: @unchecked Sendable {
     ///
     /// Returns the new PTN membership and certificates for known members
     /// (caller should distribute these to the other members).
+    /// Minimum days all admins must be absent before recovery is allowed.
+    public static let recoveryGracePeriodDays: Int = 30
+
     public func recoverPTN(oldPTNID: String) async throws -> (newMembership: PTNMembershipInfo, memberCerts: [String: Data]) {
         guard let oldMembership = memberships.first(where: { $0.ptnID == oldPTNID }) else {
             throw PTNError.ptnNotFound
+        }
+
+        // Time gate: all admins must have been absent for 30+ days
+        if let lastSeen = oldMembership.lastAdminSeenAt {
+            let daysSinceAdmin = Date().timeIntervalSince(lastSeen) / 86400
+            if daysSinceAdmin < Double(Self.recoveryGracePeriodDays) {
+                let remaining = Self.recoveryGracePeriodDays - Int(daysSinceAdmin)
+                throw PTNError.recoveryTooEarly(daysRemaining: remaining)
+            }
+        } else {
+            // No admin ever seen — only allow if this device has been a member for 30+ days
+            let daysSinceJoin = Date().timeIntervalSince(oldMembership.joinedAt) / 86400
+            if daysSinceJoin < Double(Self.recoveryGracePeriodDays) {
+                let remaining = Self.recoveryGracePeriodDays - Int(daysSinceJoin)
+                throw PTNError.recoveryTooEarly(daysRemaining: remaining)
+            }
         }
 
         let knownMembers = oldMembership.knownMemberNodeIDs ?? []
@@ -332,6 +351,29 @@ public final class PTNManager: @unchecked Sendable {
         try? await store.save(membership)
         if let idx = memberships.firstIndex(where: { $0.ptnID == ptnID }) {
             memberships[idx] = membership
+        }
+    }
+
+    /// Record that an admin was seen online for a PTN.
+    /// Called when heartbeats or discovery show a peer with admin role in this PTN.
+    public func updateAdminSeen(ptnID: String) async {
+        guard var membership = memberships.first(where: { $0.ptnID == ptnID }) else { return }
+        membership.lastAdminSeenAt = Date()
+        try? await store.save(membership)
+        if let idx = memberships.firstIndex(where: { $0.ptnID == ptnID }) {
+            memberships[idx] = membership
+        }
+    }
+
+    /// Check if recovery is available for a PTN (all admins absent for 30+ days).
+    public func isRecoveryAvailable(ptnID: String) -> Bool {
+        guard let membership = memberships.first(where: { $0.ptnID == ptnID }) else { return false }
+        guard membership.role != .admin else { return false } // Admins don't need recovery
+
+        if let lastSeen = membership.lastAdminSeenAt {
+            return Date().timeIntervalSince(lastSeen) / 86400 >= Double(Self.recoveryGracePeriodDays)
+        } else {
+            return Date().timeIntervalSince(membership.joinedAt) / 86400 >= Double(Self.recoveryGracePeriodDays)
         }
     }
 }
