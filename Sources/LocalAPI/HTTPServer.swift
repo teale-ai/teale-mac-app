@@ -91,6 +91,19 @@ public actor LocalHTTPServer {
             return try await RemoteControlRoute.unloadModel(controller: controller)
         }
 
+        // PTN endpoints
+        router.get("/v1/app/ptn") { _, _ -> Response in
+            return try await RemoteControlRoute.listPTNs(controller: controller)
+        }
+
+        router.post("/v1/app/ptn/create") { request, _ -> Response in
+            return try await RemoteControlRoute.createPTN(request: request, controller: controller)
+        }
+
+        router.post("/v1/app/ptn/invite") { request, _ -> Response in
+            return try await RemoteControlRoute.generatePTNInvite(request: request, controller: controller)
+        }
+
         let bindAddress = allowNetworkAccess ? "0.0.0.0" : "127.0.0.1"
         let app = Application(
             router: router,
