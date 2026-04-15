@@ -284,11 +284,13 @@ public struct PeerFilter: Codable, Sendable {
     public var modelID: String?
     public var minRAMGB: Double?
     public var minTier: Int?
+    public var maxPeers: Int?
 
-    public init(modelID: String? = nil, minRAMGB: Double? = nil, minTier: Int? = nil) {
+    public init(modelID: String? = nil, minRAMGB: Double? = nil, minTier: Int? = nil, maxPeers: Int? = nil) {
         self.modelID = modelID
         self.minRAMGB = minRAMGB
         self.minTier = minTier
+        self.maxPeers = maxPeers
     }
 }
 
