@@ -6,7 +6,7 @@ struct PTN: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "ptn",
         abstract: "Manage Private TealeNet memberships",
-        subcommands: [List.self, Create.self, Invite.self, IssueCert.self, Join.self, Leave.self]
+        subcommands: [List.self, Create.self, Invite.self, IssueCert.self, Join.self, Leave.self, PromoteAdmin.self, ImportCAKey.self, Recover.self]
     )
 
     @Option(name: .long, help: "Port of the running node")
@@ -134,6 +134,67 @@ extension PTN {
             let client = TealeClient(port: parent.port, apiKey: parent.apiKey)
             try await client.leavePTN(ptnID: ptnID)
             print("Left PTN \(ptnID)")
+        }
+    }
+
+    struct PromoteAdmin: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "promote-admin",
+            abstract: "Promote a member to admin (transfers CA key)"
+        )
+
+        @OptionGroup var parent: PTN
+
+        @Argument(help: "PTN ID")
+        var ptnID: String
+
+        @Argument(help: "Node ID to promote")
+        var nodeID: String
+
+        func run() async throws {
+            let client = TealeClient(port: parent.port, apiKey: parent.apiKey)
+            let json = try await client.promoteAdmin(ptnID: ptnID, nodeID: nodeID)
+            // Output the promotion payload — target imports this with `teale ptn import-ca-key`
+            print(json)
+        }
+    }
+
+    struct ImportCAKey: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "import-ca-key",
+            abstract: "Import a CA key to become admin of a PTN"
+        )
+
+        @OptionGroup var parent: PTN
+
+        @Argument(help: "PTN ID")
+        var ptnID: String
+
+        @Argument(help: "CA key hex (from `teale ptn promote-admin`)")
+        var caKeyHex: String
+
+        func run() async throws {
+            let client = TealeClient(port: parent.port, apiKey: parent.apiKey)
+            let ptn = try await client.importCAKey(ptnID: ptnID, caKeyHex: caKeyHex)
+            print("Imported CA key for PTN: \(ptn.ptnName)")
+            print("  Role: \(ptn.role)")
+        }
+    }
+
+    struct Recover: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Recover a PTN by creating a new CA from existing membership")
+
+        @OptionGroup var parent: PTN
+
+        @Argument(help: "PTN ID to recover")
+        var ptnID: String
+
+        func run() async throws {
+            let client = TealeClient(port: parent.port, apiKey: parent.apiKey)
+            let ptn = try await client.recoverPTN(ptnID: ptnID)
+            print("Recovered PTN: \(ptn.ptnName)")
+            print("  New ID: \(ptn.ptnID)")
+            print("  Role:   \(ptn.role)")
         }
     }
 }

@@ -76,6 +76,22 @@ struct TealeClient {
         return try await postRawBody("/v1/app/ptn/join-with-cert", body: data)
     }
 
+    func promoteAdmin(ptnID: String, nodeID: String) async throws -> String {
+        struct Body: Encodable { var ptn_id: String; var node_id: String }
+        let data = try await postRaw("/v1/app/ptn/promote-admin", body: Body(ptn_id: ptnID, node_id: nodeID))
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    func importCAKey(ptnID: String, caKeyHex: String) async throws -> RemotePTNSnapshot {
+        struct Body: Encodable { var ptn_id: String; var ca_key_hex: String }
+        return try await post("/v1/app/ptn/import-ca-key", body: Body(ptn_id: ptnID, ca_key_hex: caKeyHex))
+    }
+
+    func recoverPTN(ptnID: String) async throws -> RemotePTNSnapshot {
+        struct Body: Encodable { var ptn_id: String }
+        return try await post("/v1/app/ptn/recover", body: Body(ptn_id: ptnID))
+    }
+
     // MARK: - API Keys
 
     func listAPIKeys() async throws -> [RemoteAPIKeySnapshot] {
