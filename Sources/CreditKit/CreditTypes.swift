@@ -56,6 +56,7 @@ public enum TransactionType: String, Codable, Sendable {
     case adjustment
     case transfer
     case sdkEarning    // Earned via TealeSDK contribution (attributed to developer wallet)
+    case platformFee   // 1.8% network fee deducted from inference transactions
 }
 
 // MARK: - USDCTransaction
@@ -133,10 +134,13 @@ public struct InferencePricing: Sendable {
         cost(tokenCount: tokenCount, parameterCount: model.parameterCount, quantization: model.quantization)
     }
 
-    /// The earning rate is 95% of the cost (5% network fee).
+    /// Platform fee rate (must match WalletKitConfig.platformFeeRate).
+    public static let platformFeeRate: Double = 0.018
+
+    /// The earning rate is 98.2% of the cost (1.8% network fee).
     public static func earning(tokenCount: Int, parameterCount: String, quantization: QuantizationType) -> USDCAmount {
         let totalCost = cost(tokenCount: tokenCount, parameterCount: parameterCount, quantization: quantization)
-        return totalCost * 0.95
+        return totalCost * (1.0 - platformFeeRate)
     }
 
     /// The earning rate using a ModelDescriptor.

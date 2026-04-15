@@ -272,7 +272,7 @@ public struct RemoteSolanaSnapshot: Codable, Sendable {
     public var usdcBalance: String
     public var network: String
 
-    public init(enabled: Bool, address: String = "", usdcBalance: String = "0", network: String = "devnet") {
+    public init(enabled: Bool, address: String = "", usdcBalance: String = "0", network: String = "mainnet") {
         self.enabled = enabled
         self.address = address
         self.usdcBalance = usdcBalance
