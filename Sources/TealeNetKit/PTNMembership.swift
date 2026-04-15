@@ -16,6 +16,10 @@ public struct PTNMembershipInfo: Codable, Sendable, Identifiable {
     /// Node IDs of known PTN members (learned from heartbeats/discovery).
     /// Used for recovery if all admins are lost.
     public var knownMemberNodeIDs: [String]?
+    /// Last time ANY admin was seen online (heartbeat/discovery).
+    /// Used for time-gated recovery — recovery only available after
+    /// all admins have been absent for 30+ days.
+    public var lastAdminSeenAt: Date?
 
     public init(
         ptnID: String,
@@ -25,7 +29,8 @@ public struct PTNMembershipInfo: Codable, Sendable, Identifiable {
         role: PTNRole,
         isCreator: Bool,
         joinedAt: Date = Date(),
-        knownMemberNodeIDs: [String]? = nil
+        knownMemberNodeIDs: [String]? = nil,
+        lastAdminSeenAt: Date? = nil
     ) {
         self.ptnID = ptnID
         self.ptnName = ptnName
@@ -35,6 +40,7 @@ public struct PTNMembershipInfo: Codable, Sendable, Identifiable {
         self.isCreator = isCreator
         self.joinedAt = joinedAt
         self.knownMemberNodeIDs = knownMemberNodeIDs
+        self.lastAdminSeenAt = lastAdminSeenAt
     }
 
     /// Convert to a lightweight PTNIdentifier for broadcasting.

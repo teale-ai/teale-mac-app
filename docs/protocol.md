@@ -13,6 +13,22 @@ TealeNet uses a **relay server** as a rendezvous point. Nodes connect via WebSoc
 - **Keepalive:** Send WebSocket ping frames every 25 seconds
 - **Reconnect:** Exponential backoff starting at 1s, max 60s
 
+## HTTP Endpoints
+
+- `GET /health` — `{"ok": true, "peers": N}`
+- `GET /peers` — list of connected peers (truncated nodeIDs)
+- `GET /metrics` — server metrics:
+  ```json
+  {
+    "peers": 42,
+    "messagesPerMinute": 156,
+    "relaySessionsActive": 3,
+    "uptimeSeconds": 86400,
+    "totalMessages": 12345
+  }
+  ```
+- `GET /ws` — WebSocket upgrade endpoint
+
 ## Date Encoding
 
 All `Date` fields use **Apple's reference date** encoding: seconds since `2001-01-01T00:00:00Z` as a floating-point number. This is Swift's `.deferredToDate` strategy.
@@ -83,17 +99,26 @@ Request peer list from relay.
     "filter": {
       "modelID": "optional-model-id",
       "minRAMGB": 16.0,
-      "minTier": 2
+      "minTier": 2,
+      "maxPeers": 50
     }
   }
 }
 ```
 
-`filter` is optional (can be null or omitted).
+`filter` is optional (can be null or omitted). All filter fields are optional.
+
+**Server-side filtering:** The relay applies filters before returning results:
+- `modelID` — only peers with this model in `capabilities.loadedModels`
+- `minRAMGB` — only peers with `capabilities.hardware.totalRAMGB >= value`
+- `minTier` — only peers with `capabilities.hardware.tier <= value` (tier 1 is best)
+- `maxPeers` — cap response to this many peers (default 50). If more match, a random sample is returned.
+
+**Rate limit:** Max 1 discover per 10 seconds per node. Exceeding returns a `rate_limited` error.
 
 ### `discoverResponse`
 
-Server returns list of all connected peers (excluding requester).
+Server returns filtered list of connected peers (excluding requester), capped at `maxPeers`.
 
 ```json
 {
@@ -220,9 +245,9 @@ Close a relayed session.
 }
 ```
 
-### `peerJoined` / `peerLeft`
+### `peerJoined` / `peerLeft` (deprecated)
 
-Broadcast by relay server when peers register/disconnect.
+Previously broadcast by relay server when peers register/disconnect. **Deprecated as of v1.1** — the server no longer sends these messages. Clients should use poll-based discovery instead (periodic `discover` calls every 30 seconds).
 
 ```json
 {
@@ -237,6 +262,25 @@ Error from relay server.
 ```json
 {
   "error": { "code": "peer_not_found", "message": "Peer abc... is not connected" }
+}
+```
+
+Error codes:
+- `peer_not_found` — target peer is not connected
+- `invalid_json` — message could not be parsed
+- `invalid_message` — empty or malformed message
+- `invalid_register` — missing required fields in register
+- `rate_limited` — too many requests; includes `retryAfterSeconds` field
+- `unsupported_message` — unknown message type
+
+Rate-limited error example:
+```json
+{
+  "error": {
+    "code": "rate_limited",
+    "message": "Discover rate limited, retry after 8s",
+    "retryAfterSeconds": 8
+  }
 }
 ```
 
