@@ -106,6 +106,14 @@ let package = Package(
             ]
         ),
 
+        // MARK: - CompilerKit (Mixture of Models — request compilation & fan-out)
+        .target(
+            name: "CompilerKit",
+            dependencies: [
+                "SharedTypes",
+            ]
+        ),
+
         // MARK: - CreditKit
         .target(
             name: "CreditKit",
@@ -184,6 +192,7 @@ let package = Package(
                 "AgentKit",
                 "AuthKit",
                 "ChatKit",
+                "CompilerKit",
             ]
         ),
 
