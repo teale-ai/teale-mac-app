@@ -12,3 +12,4 @@ Supabase.plist
 !Sources/AuthKit/Resources/Supabase.plist
 default.profraw
 node_modules/
+teale-node/target/

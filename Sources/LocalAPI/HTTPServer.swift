@@ -104,6 +104,14 @@ public actor LocalHTTPServer {
             return try await RemoteControlRoute.generatePTNInvite(request: request, controller: controller)
         }
 
+        router.post("/v1/app/ptn/issue-cert") { request, _ -> Response in
+            return try await RemoteControlRoute.issuePTNCert(request: request, controller: controller)
+        }
+
+        router.post("/v1/app/ptn/join-with-cert") { request, _ -> Response in
+            return try await RemoteControlRoute.joinPTNWithCert(request: request, controller: controller)
+        }
+
         router.post("/v1/app/ptn/leave") { request, _ -> Response in
             return try await RemoteControlRoute.leavePTN(request: request, controller: controller)
         }

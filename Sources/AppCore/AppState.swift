@@ -421,6 +421,8 @@ public final class AppState {
                         engineStatus = .ready(descriptor)
                         loadingPhase = ""
                     } catch {
+                        let msg = "[GGUF] Auto-load failed: \(error.localizedDescription)"
+                        FileHandle.standardError.write(Data((msg + "\n").utf8))
                         engineStatus = .error(error.localizedDescription)
                         loadingPhase = ""
                     }
