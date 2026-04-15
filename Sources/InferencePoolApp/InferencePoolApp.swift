@@ -90,6 +90,7 @@ struct ContentView: View {
         .task {
             await appState.startServer()
             await appState.initializeAsync()
+            await appState.updateChecker.checkIfNeeded()
         }
         .onAppear {
             if needsSignIn, let authManager = appState.authManager {
