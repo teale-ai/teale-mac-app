@@ -312,13 +312,19 @@ public final class AppState {
             preferredModelID: UserDefaults.standard.string(forKey: Self.exoPreferredModelIDKey)
         )
         self.exoProvider = exoProvider
-        let ramGB = hw.totalRAMGB
+        let defaultProfile = DeviceModelProfileResolver.resolve(
+            hardware: hw,
+            userOverrides: UserProfileOverrides.load()
+        )
         let llamaCppProvider = LlamaCppProvider(
             binaryPath: UserDefaults.standard.string(forKey: Self.llamaCppBinaryPathKey) ?? "llama-server",
-            contextSize: ramGB >= 128 ? 65536 : 32768,
-            parallelSlots: ramGB >= 128 ? 4 : 1,
-            flashAttn: ramGB >= 64,
-            mmap: ramGB >= 64,
+            gpuLayers: defaultProfile.gpuLayers ?? 999,
+            contextSize: defaultProfile.contextSize ?? 32768,
+            parallelSlots: defaultProfile.parallelSlots ?? 1,
+            batchSize: defaultProfile.batchSize ?? 4096,
+            kvCacheType: defaultProfile.kvCacheType ?? "q8_0",
+            flashAttn: defaultProfile.flashAttn ?? false,
+            mmap: defaultProfile.mmap ?? false,
             host: "0.0.0.0"
         )
         self.llamaCppProvider = llamaCppProvider
@@ -787,6 +793,23 @@ public final class AppState {
             engineStatus = .loadingModel(descriptor)
             loadingPhase = "Starting llama-server..."
             loadingProgress = nil
+
+            // Apply model-specific profile before loading
+            let profile = DeviceModelProfileResolver.resolve(
+                hardware: hardware, model: descriptor,
+                userOverrides: UserProfileOverrides.load()
+            )
+            await llamaCppProvider.updateConfiguration(
+                gpuLayers: profile.gpuLayers,
+                contextSize: profile.contextSize,
+                parallelSlots: profile.parallelSlots,
+                batchSize: profile.batchSize,
+                reasoningOff: profile.reasoningOff,
+                kvCacheType: profile.kvCacheType,
+                threads: profile.threads,
+                flashAttn: profile.flashAttn,
+                mmap: profile.mmap
+            )
 
             // Load directly on the llama.cpp provider, then update the engine's provider chain
             try await llamaCppProvider.loadModel(descriptor)
