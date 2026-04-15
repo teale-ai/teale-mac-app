@@ -320,21 +320,20 @@ struct SettingsView: View {
                 }
 
                 HStack {
-                    Text("Margin")
-                    Slider(
-                        value: Binding(
-                            get: { appState.electricityMarginMultiplier },
-                            set: { appState.electricityMarginMultiplier = $0 }
-                        ),
-                        in: 0.0...3.0,
-                        step: 0.1
-                    )
+                    Text("Margin multiplier")
+                    TextField("1.2", value: Binding(
+                        get: { appState.electricityMarginMultiplier },
+                        set: { appState.electricityMarginMultiplier = max(0, $0) }
+                    ), format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 80)
+                    Text("×")
                     Text(marginLabel)
-                        .font(.caption.weight(.medium))
-                        .frame(width: 60, alignment: .trailing)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
-                Text("Floor price multiplier over electricity cost. 0.0× = donate inference for free, 1.0× = break even, >1.0× = profit. Nonprofit PTNs can set 0.0× so members donate compute for good causes.")
+                Text("Multiplier over electricity cost. 0× = free, 1× = break even, 1.2× = 20% profit. No cap — free market pricing. Unreasonably high values simply won't attract requests.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
