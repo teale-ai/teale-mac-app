@@ -6,7 +6,7 @@ struct PTN: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "ptn",
         abstract: "Manage Private TealeNet memberships",
-        subcommands: [List.self, Create.self, Invite.self, Leave.self]
+        subcommands: [List.self, Create.self, Invite.self, IssueCert.self, Join.self, Leave.self]
     )
 
     @Option(name: .long, help: "Port of the running node")
@@ -77,6 +77,48 @@ extension PTN {
             let client = TealeClient(port: parent.port, apiKey: parent.apiKey)
             let code = try await client.invitePTN(ptnID: ptnID)
             print(code)
+        }
+    }
+
+    struct IssueCert: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "issue-cert",
+            abstract: "Issue a membership certificate for a node (admin only)"
+        )
+
+        @OptionGroup var parent: PTN
+
+        @Argument(help: "PTN ID")
+        var ptnID: String
+
+        @Argument(help: "Node ID of the joining device")
+        var nodeID: String
+
+        @Option(name: .long, help: "Role to assign (provider, consumer)")
+        var role: String = "provider"
+
+        func run() async throws {
+            let client = TealeClient(port: parent.port, apiKey: parent.apiKey)
+            let certJSON = try await client.issuePTNCert(ptnID: ptnID, nodeID: nodeID, role: role)
+            // Print raw cert JSON — the joiner pastes this into `teale ptn join`
+            print(certJSON)
+        }
+    }
+
+    struct Join: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Join a PTN using a certificate")
+
+        @OptionGroup var parent: PTN
+
+        @Argument(help: "Certificate JSON (from `teale ptn issue-cert`)")
+        var certData: String
+
+        func run() async throws {
+            let client = TealeClient(port: parent.port, apiKey: parent.apiKey)
+            let ptn = try await client.joinPTNWithCert(certData: certData)
+            print("Joined PTN: \(ptn.ptnName)")
+            print("  ID:   \(ptn.ptnID)")
+            print("  Role: \(ptn.role)")
         }
     }
 

@@ -151,6 +151,19 @@ public actor LocalHTTPServer {
             return try await RemoteControlRoute.listPeers(controller: controller)
         }
 
+        // Agent endpoints
+        router.get("/v1/app/agent/profile") { _, _ -> Response in
+            return try await RemoteControlRoute.agentProfile(controller: controller)
+        }
+
+        router.get("/v1/app/agent/directory") { _, _ -> Response in
+            return try await RemoteControlRoute.agentDirectory(controller: controller)
+        }
+
+        router.get("/v1/app/agent/conversations") { _, _ -> Response in
+            return try await RemoteControlRoute.agentConversations(controller: controller)
+        }
+
         let bindAddress = allowNetworkAccess ? "0.0.0.0" : "127.0.0.1"
         let app = Application(
             router: router,
