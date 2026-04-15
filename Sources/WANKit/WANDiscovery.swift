@@ -72,6 +72,7 @@ public actor WANDiscoveryService {
     private let config: WANConfig
     private var knownPeers: [String: WANPeerInfo] = [:]  // nodeID -> info
     private var discoveryTask: Task<Void, Never>?
+    private var discoveryPollTask: Task<Void, Never>?
     private var reregistrationTask: Task<Void, Never>?
     private var localCapabilities: NodeCapabilities?
     private var forceRediscoveryOnNextResponse: Bool = false
@@ -123,6 +124,9 @@ public actor WANDiscoveryService {
 
         // Initial peer discovery
         try await relayClient.discover()
+
+        // Periodic discovery polling (replaces broadcast-triggered discovery)
+        startDiscoveryPolling()
     }
 
     public func setForceRediscovery(_ flag: Bool) {
@@ -133,6 +137,8 @@ public actor WANDiscoveryService {
     public func stop() {
         discoveryTask?.cancel()
         discoveryTask = nil
+        discoveryPollTask?.cancel()
+        discoveryPollTask = nil
         reregistrationTask?.cancel()
         reregistrationTask = nil
         knownPeers.removeAll()
@@ -210,13 +216,10 @@ public actor WANDiscoveryService {
                 }
             }
 
-        case .peerJoined(let payload):
-            // A new peer registered — we may not have full info yet,
-            // trigger a discovery refresh
-            Task {
-                try? await relayClient.discover()
-            }
-            _ = payload  // suppress unused warning
+        case .peerJoined:
+            // Deprecated: server no longer sends broadcasts.
+            // Discovery is now poll-based (every 30s).
+            break
 
         case .peerLeft(let payload):
             knownPeers.removeValue(forKey: payload.nodeID)
@@ -228,6 +231,16 @@ public actor WANDiscoveryService {
 
         default:
             break
+        }
+    }
+
+    private func startDiscoveryPolling() {
+        discoveryPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard let self = self, !Task.isCancelled else { return }
+                try? await self.relayClient.discover()
+            }
         }
     }
 
