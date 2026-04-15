@@ -13,6 +13,9 @@ public protocol LocalAppControlling: AnyObject {
     func remoteIssuePTNCert(ptnID: String, nodeID: String, role: String) async throws -> Data
     func remoteJoinPTNWithCert(certData: Data) async throws -> RemotePTNSnapshot
     func remoteLeavePTN(ptnID: String) async throws
+    func remotePromoteAdmin(ptnID: String, targetNodeID: String) async throws -> Data
+    func remoteImportCAKey(ptnID: String, caKeyHex: String) async throws -> RemotePTNSnapshot
+    func remoteRecoverPTN(oldPTNID: String) async throws -> RemotePTNSnapshot
     func remoteListAPIKeys() async -> [RemoteAPIKeySnapshot]
     func remoteGenerateAPIKey(name: String) async -> RemoteAPIKeySnapshot
     func remoteRevokeAPIKey(id: UUID) async
