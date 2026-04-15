@@ -1,6 +1,12 @@
 import Foundation
 import SharedTypes
 
+// MARK: - Targeted Dispatch
+
+/// Closure that dispatches a request to a specific device/model on the network.
+/// Provided by the app layer (AppState) which has access to cluster and WAN managers.
+public typealias TargetedDispatchFn = @Sendable (ChatCompletionRequest, ModelOnNetwork) async throws -> ChatCompletionResponse
+
 // MARK: - Compiler
 
 /// The main entry point for Mixture of Models (MoM) compilation.
@@ -17,6 +23,7 @@ public actor Compiler: InferenceProvider {
     private let executor: FanOutExecutor
     private let synthesizer: ResponseSynthesizer
     private let fallbackProvider: any InferenceProvider
+    private let dispatchFn: TargetedDispatchFn?
 
     // MARK: - Network State
 
@@ -43,11 +50,15 @@ public actor Compiler: InferenceProvider {
     ///   - compilerProvider: Small/fast model for decomposition (the "compiler" model).
     ///     Can be the same as fallbackProvider on single-model setups.
     ///   - fallbackProvider: Provider for passthrough requests and synthesis.
+    ///   - synthesisProvider: Optional provider for LLM-based synthesis of sub-task results.
+    ///   - dispatchFn: Optional closure for targeted dispatch to specific devices.
+    ///     When nil, all sub-tasks go through fallbackProvider.
     ///   - onCompilationCompleted: Called with contribution records after a compiled response.
     public init(
         compilerProvider: any InferenceProvider,
         fallbackProvider: any InferenceProvider,
         synthesisProvider: (any InferenceProvider)? = nil,
+        dispatchFn: TargetedDispatchFn? = nil,
         onCompilationCompleted: (@Sendable ([ContributionRecord]) async -> Void)? = nil
     ) {
         self.analyzer = RequestAnalyzer()
@@ -56,6 +67,7 @@ public actor Compiler: InferenceProvider {
         self.executor = FanOutExecutor()
         self.synthesizer = ResponseSynthesizer(synthesisProvider: synthesisProvider ?? fallbackProvider)
         self.fallbackProvider = fallbackProvider
+        self.dispatchFn = dispatchFn
         self.onCompilationCompleted = onCompilationCompleted
     }
 
@@ -96,17 +108,19 @@ public actor Compiler: InferenceProvider {
     }
 
     public func generateFull(request: ChatCompletionRequest) async throws -> ChatCompletionResponse {
+        let routedRequest = smartRoute(request)
+
         let shouldCompile = analyzer.shouldCompile(
-            request: request,
+            request: routedRequest,
             availableModelCount: availableModels.count
         )
 
         if !shouldCompile {
-            return try await fallbackProvider.generateFull(request: request)
+            return try await fallbackProvider.generateFull(request: routedRequest)
         }
 
         // Compile the request
-        let result = try await compile(request: request)
+        let result = try await compile(request: routedRequest)
         return ChatCompletionResponse(
             id: "chatcmpl-\(UUID().uuidString)",
             model: "mom-compiler",
@@ -116,12 +130,38 @@ public actor Compiler: InferenceProvider {
         )
     }
 
+    // MARK: - Smart Routing
+
+    /// When the user doesn't specify a model, pick the best one for passthrough.
+    /// When a model is explicitly set, respect the user's choice.
+    private func smartRoute(_ request: ChatCompletionRequest) -> ChatCompletionRequest {
+        // User explicitly chose a model — respect it
+        guard request.model == nil else { return request }
+
+        // No models on network — let the chain handle it normally
+        guard !availableModels.isEmpty else { return request }
+
+        // Pick the best single model for a general task
+        let generalTask = SubTask(
+            prompt: "",
+            category: .general,
+            orderIndex: 0,
+            estimatedTokens: 500
+        )
+        if let best = selector.select(for: generalTask, from: availableModels) {
+            var routed = request
+            routed.model = best.model
+            return routed
+        }
+
+        return request
+    }
+
     // MARK: - Core Compilation Pipeline
 
     private func compile(request: ChatCompletionRequest) async throws -> String {
         // Stage 1 & 2: Decompose
         guard let decomposition = try await decomposer.decompose(request: request) else {
-            // Decomposer decided this isn't decomposable — fallback
             return try await fallbackFull(request: request)
         }
 
@@ -133,23 +173,21 @@ public actor Compiler: InferenceProvider {
         // Stage 3: Select models for each sub-task
         let assignments = selector.assign(subTasks: subTasks, available: availableModels)
 
-        // Verify we have assignments for all sub-tasks
         let unassigned = subTasks.filter { assignments[$0.id] == nil }
         if !unassigned.isEmpty {
-            // Some sub-tasks couldn't be assigned — fall back
             return try await fallbackFull(request: request)
         }
 
-        // Stage 4: Execute in parallel
-        // The generateFn closure is what actually calls inference on a device.
-        // In the current architecture, we use the fallback provider for all sub-tasks.
-        // When integrated with ClusterKit, this will dispatch to specific peers.
+        // Stage 4: Execute in parallel with targeted dispatch
+        let dispatch = self.dispatchFn
+        let fallback = self.fallbackProvider
+
         let generateFn: @Sendable (SubTask, ModelOnNetwork, [SubTaskResult]) async throws -> SubTaskResult = {
-            [fallbackProvider] subTask, model, depResults in
+            subTask, model, depResults in
 
             let start = CFAbsoluteTimeGetCurrent()
 
-            // Build the sub-task request, optionally including dependency context
+            // Build the sub-task request with dependency context
             var messages = [APIMessage(role: "user", content: subTask.prompt)]
             if !depResults.isEmpty {
                 let context = depResults.map(\.content).joined(separator: "\n\n")
@@ -165,7 +203,19 @@ public actor Compiler: InferenceProvider {
                 maxTokens: subTask.estimatedTokens
             )
 
-            let response = try await fallbackProvider.generateFull(request: subRequest)
+            // Use targeted dispatch if available, otherwise fallback
+            let response: ChatCompletionResponse
+            if let dispatch {
+                do {
+                    response = try await dispatch(subRequest, model)
+                } catch {
+                    // Peer may have disconnected — fall back to chain
+                    response = try await fallback.generateFull(request: subRequest)
+                }
+            } else {
+                response = try await fallback.generateFull(request: subRequest)
+            }
+
             let content = response.choices.first?.message.content ?? ""
             let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000
 
@@ -216,14 +266,15 @@ public actor Compiler: InferenceProvider {
         request: ChatCompletionRequest,
         continuation: AsyncThrowingStream<ChatCompletionChunk, Error>.Continuation
     ) async throws {
+        let routedRequest = smartRoute(request)
+
         let shouldCompile = analyzer.shouldCompile(
-            request: request,
+            request: routedRequest,
             availableModelCount: availableModels.count
         )
 
         if !shouldCompile {
-            // Passthrough: stream directly from fallback
-            let stream = fallbackProvider.generate(request: request)
+            let stream = fallbackProvider.generate(request: routedRequest)
             for try await chunk in stream {
                 continuation.yield(chunk)
             }
@@ -232,20 +283,17 @@ public actor Compiler: InferenceProvider {
         }
 
         // Compile and stream the result
-        let result = try await compile(request: request)
+        let result = try await compile(request: routedRequest)
 
-        // Stream the compiled result as chunks
         let chunkID = "chatcmpl-\(UUID().uuidString)"
         let words = result.components(separatedBy: " ")
 
-        // Emit role chunk
         continuation.yield(ChatCompletionChunk(
             id: chunkID,
             model: "mom-compiler",
             choices: [.init(index: 0, delta: .init(role: "assistant"), finishReason: nil)]
         ))
 
-        // Emit content in word-sized chunks for natural streaming feel
         for (i, word) in words.enumerated() {
             let content = i == 0 ? word : " \(word)"
             continuation.yield(ChatCompletionChunk(
@@ -255,7 +303,6 @@ public actor Compiler: InferenceProvider {
             ))
         }
 
-        // Emit finish chunk
         continuation.yield(ChatCompletionChunk(
             id: chunkID,
             model: "mom-compiler",

@@ -172,6 +172,93 @@ public actor WANProvider: InferenceProvider {
         continuation.finish()
     }
 
+    // MARK: - Public Targeted Dispatch
+
+    /// Execute a full (non-streaming) inference request on a specific WAN peer by node ID.
+    /// Used by CompilerKit for targeted sub-task dispatch.
+    public func generateFull(onPeerNodeID nodeID: String, request: ChatCompletionRequest) async throws -> ChatCompletionResponse {
+        guard let connection = wanManager.connectedPeers(byNodeID: nodeID) else {
+            throw WANError.peerDisconnected
+        }
+
+        let requestID = UUID()
+        let payload = InferenceRequestPayload(
+            requestID: requestID,
+            request: request,
+            streaming: true
+        )
+
+        let messages = await connection.incomingMessages
+        try await connection.send(.inferenceRequest(payload))
+
+        return try await withThrowingTaskGroup(of: ChatCompletionResponse.self) { group in
+            // Timeout task
+            group.addTask {
+                try await Task.sleep(for: .seconds(self.wanTimeoutSeconds))
+                throw WANError.timeout
+            }
+
+            // Message processing task
+            group.addTask {
+                var totalTokens = 0
+                var fullContent = ""
+                for await message in messages {
+                    switch message {
+                    case .inferenceChunk(let chunk) where chunk.requestID == requestID:
+                        if let content = chunk.chunk.choices.first?.delta.content {
+                            totalTokens += max(content.count / 4, 1)
+                            fullContent += content
+                        }
+                        if chunk.chunk.choices.first?.finishReason != nil {
+                            if totalTokens > 0 {
+                                let model = request.model ?? "unknown"
+                                await self._onRemoteInferenceCompleted?(totalTokens, model, nodeID)
+                            }
+                            return ChatCompletionResponse(
+                                id: "chatcmpl-\(requestID.uuidString)",
+                                model: request.model ?? "unknown",
+                                choices: [
+                                    .init(index: 0, message: APIMessage(role: "assistant", content: fullContent), finishReason: "stop")
+                                ],
+                                usage: .init(promptTokens: 0, completionTokens: totalTokens, totalTokens: totalTokens)
+                            )
+                        }
+
+                    case .inferenceComplete(let complete) where complete.requestID == requestID:
+                        if totalTokens > 0 {
+                            let model = request.model ?? "unknown"
+                            await self._onRemoteInferenceCompleted?(totalTokens, model, nodeID)
+                        }
+                        return ChatCompletionResponse(
+                            id: "chatcmpl-\(requestID.uuidString)",
+                            model: request.model ?? "unknown",
+                            choices: [
+                                .init(index: 0, message: APIMessage(role: "assistant", content: fullContent), finishReason: "stop")
+                            ],
+                            usage: .init(promptTokens: 0, completionTokens: totalTokens, totalTokens: totalTokens)
+                        )
+
+                    case .inferenceError(let error) where error.requestID == requestID:
+                        throw WANError.peerConnectionFailed(error.errorMessage)
+
+                    default:
+                        continue
+                    }
+                }
+                throw WANError.peerDisconnected
+            }
+
+            do {
+                let result = try await group.next()!
+                group.cancelAll()
+                return result
+            } catch {
+                group.cancelAll()
+                throw error
+            }
+        }
+    }
+
     // MARK: - Remote Generation
 
     private func generateRemote(

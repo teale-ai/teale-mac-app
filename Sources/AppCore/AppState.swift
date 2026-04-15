@@ -15,6 +15,7 @@ import AuthKit
 import WalletKit
 import LlamaCppKit
 import TealeNetKit
+import CompilerKit
 
 // MARK: - App State
 
@@ -47,6 +48,9 @@ public final class AppState {
     private let localProvider: MLXProvider
     private let exoProvider: ExoProvider
     private let llamaCppProvider: LlamaCppProvider
+
+    // Compiler (Mixture of Models)
+    private var compiler: Compiler?
 
     // Models
     public let modelManager: ModelManagerService
@@ -960,6 +964,9 @@ public final class AppState {
         } else {
             Self.wanLog("syncAdvertised: WAN not enabled, skipping (models=\(loadedModels))")
         }
+
+        // Refresh compiler's available models whenever local/peer models change
+        Task { await refreshCompilerModels() }
     }
 
     private func recordRemoteInferenceSettlement(_ record: ClusterProvider.RemoteGenerationRecord) async {
@@ -1210,21 +1217,100 @@ public final class AppState {
     private func buildActiveInferenceProvider() -> any InferenceProvider {
         var provider: any InferenceProvider = currentBaseProvider
 
+        var clusterProvider: ClusterProvider?
         if clusterEnabled {
-            provider = ClusterProvider(
+            let cp = ClusterProvider(
                 localProvider: provider,
                 clusterManager: clusterManager,
                 onRemoteGenerationCompleted: { [weak self] record in
                     await self?.recordRemoteInferenceSettlement(record)
                 }
             )
+            clusterProvider = cp
+            provider = cp
         }
 
+        var wanProvider: WANProvider?
         if wanEnabled {
-            provider = WANProvider(localProvider: provider, wanManager: wanManager)
+            let wp = WANProvider(localProvider: provider, wanManager: wanManager)
+            wanProvider = wp
+            provider = wp
+        }
+
+        // Wrap in Compiler for model-agnostic inference
+        let localBase = currentBaseProvider
+        let capturedClusterProvider = clusterProvider
+        let capturedWANProvider = wanProvider
+        let capturedWANManager = wanManager
+
+        let dispatchFn: TargetedDispatchFn = { request, model in
+            if model.deviceID == nil {
+                // Local device
+                return try await localBase.generateFull(request: request)
+            }
+
+            // Try LAN peer
+            if let cp = capturedClusterProvider,
+               let peer = await cp.peer(byID: model.deviceID!) {
+                return try await cp.generateFull(onPeer: peer, request: request)
+            }
+
+            // Try WAN peer
+            if let wp = capturedWANProvider {
+                let nodeID = model.deviceID!.uuidString.lowercased()
+                if capturedWANManager.connectedPeers(byNodeID: nodeID) != nil {
+                    return try await wp.generateFull(onPeerNodeID: nodeID, request: request)
+                }
+            }
+
+            // Peer not found — let the chain handle it
+            throw CompilationError.subTaskFailed(subTaskID: UUID(), error: "Device \(model.deviceID?.uuidString ?? "unknown") not reachable")
+        }
+
+        let comp = Compiler(
+            compilerProvider: localBase,
+            fallbackProvider: provider,
+            synthesisProvider: provider,
+            dispatchFn: dispatchFn,
+            onCompilationCompleted: { [weak self] contributions in
+                await self?.recordCompilationContributions(contributions)
+            }
+        )
+        self.compiler = comp
+        provider = comp
+
+        // Refresh available models for the compiler
+        Task { [weak self] in
+            await self?.refreshCompilerModels()
         }
 
         return provider
+    }
+
+    // MARK: - Compiler Model Refresh
+
+    private func refreshCompilerModels() async {
+        guard let compiler else { return }
+
+        let localModel = await engine.loadedModel
+        let lanPeers = Array(clusterManager.topology.connectedPeers)
+        let wanPeers = wanManager.state.connectedPeers
+
+        let models = NetworkModelCollector.collect(
+            localModel: localModel,
+            localHardware: hardware,
+            lanPeers: lanPeers,
+            wanPeers: wanPeers
+        )
+
+        await compiler.updateAvailableModels(models)
+    }
+
+    private func recordCompilationContributions(_ contributions: [ContributionRecord]) {
+        // Log compilation contributions for future credit settlement
+        for contribution in contributions {
+            totalTokensGenerated += contribution.tokenCount
+        }
     }
 
     private func applyInferenceBackendSelection() async {

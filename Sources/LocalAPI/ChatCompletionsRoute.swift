@@ -9,7 +9,13 @@ import InferenceEngine
 enum ChatCompletionsRoute {
     static func handle(request: Request, engine: InferenceEngineManager, onCompleted: RequestCompletedHandler? = nil) async throws -> Response {
         let body = try await request.body.collect(upTo: 1_048_576)
-        let chatRequest = try JSONDecoder().decode(ChatCompletionRequest.self, from: body)
+        var chatRequest = try JSONDecoder().decode(ChatCompletionRequest.self, from: body)
+
+        // "teale-auto" means "let the system pick" — clear the model field
+        // so the Compiler's smart routing decides based on quality and speed.
+        if chatRequest.model == ModelsRoute.autoModelID {
+            chatRequest.model = nil
+        }
 
         let isStreaming = chatRequest.stream ?? false
 
