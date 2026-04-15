@@ -2,6 +2,8 @@ import SwiftUI
 import AppCore
 import SharedTypes
 import TealeNetKit
+import ClusterKit
+import WANKit
 
 struct PTNSettingsSection: View {
     @Environment(AppState.self) private var appState
@@ -151,15 +153,37 @@ struct PTNSettingsSection: View {
         Task {
             do {
                 let token = try PTNInviteToken.decode(from: joinCode)
-                // For now, complete join locally (full relay exchange is Phase 2)
-                // This validates the invite code format
-                _ = token
-                self.error = "Invite code valid for \"\(token.ptnName)\". Relay-based join exchange coming soon."
+
+                // Build join request payload
+                let joinRequest = PTNJoinRequestPayload(
+                    inviteToken: token,
+                    joinerNodeID: appState.ptnManager.localNodeID,
+                    joinerDisplayName: ProcessInfo.processInfo.hostName
+                )
+                let requestData = try JSONEncoder().encode(joinRequest)
+
+                // Find the inviter among connected WAN peers and send the join request
+                if let connection = appState.wanManager.connectedPeers(byNodeID: token.inviterNodeID) {
+                    try await connection.send(.ptnJoinRequest(PTNJoinRequestTransportPayload(data: requestData)))
+
+                    // Wait for response (listen on the connection's incoming messages)
+                    let messages = await connection.incomingMessages
+                    for await message in messages {
+                        if case .ptnJoinResponse(let responsePayload) = message {
+                            let response = try JSONDecoder().decode(PTNJoinResponsePayload.self, from: responsePayload.data)
+                            let membership = try await appState.ptnManager.completeJoin(response: response)
+                            self.error = nil
+                            joinCode = ""
+                            break
+                        }
+                    }
+                } else {
+                    self.error = "Cannot reach inviter \(token.inviterNodeID.prefix(16))... — ensure WAN is enabled and connected."
+                }
             } catch {
                 self.error = error.localizedDescription
             }
             isJoining = false
-            joinCode = ""
         }
     }
 
