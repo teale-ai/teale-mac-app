@@ -351,9 +351,13 @@ struct SettingsView: View {
                     .foregroundStyle(.tertiary)
 
                 if appState.solanaWalletEnabled {
-                    Picker("Network", selection: $state.solanaNetwork) {
-                        Text("Devnet (test)").tag("devnet")
-                        Text("Mainnet (real USDC)").tag("mainnet")
+                    if UserDefaults.standard.bool(forKey: "teale.showDevnetOption") {
+                        Picker("Network", selection: $state.solanaNetwork) {
+                            Text("Devnet (test)").tag("devnet")
+                            Text("Mainnet (real USDC)").tag("mainnet")
+                        }
+                    } else {
+                        LabeledContent("Network", value: appState.solanaNetwork == "mainnet" ? "Mainnet" : "Devnet")
                     }
 
                     if let bridge = appState.walletBridge {

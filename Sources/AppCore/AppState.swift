@@ -87,13 +87,39 @@ public final class AppState {
             Task { await toggleSolanaWallet() }
         }
     }
-    public var solanaNetwork: String = UserDefaults.standard.string(forKey: "teale.solanaNetwork") ?? "devnet" {
+    public var solanaNetwork: String = AppState.resolvedSolanaNetwork() {
         didSet {
             UserDefaults.standard.set(solanaNetwork, forKey: "teale.solanaNetwork")
             if solanaWalletEnabled {
                 Task { await toggleSolanaWallet() }
             }
         }
+    }
+
+    /// One-time migration from devnet default to mainnet.
+    /// Users who actively used devnet (wallet enabled) keep their choice.
+    private static func resolvedSolanaNetwork() -> String {
+        let defaults = UserDefaults.standard
+        let migrationKey = "teale.solanaNetworkMigratedToMainnet"
+
+        if defaults.bool(forKey: migrationKey) {
+            return defaults.string(forKey: "teale.solanaNetwork") ?? "mainnet"
+        }
+
+        defaults.set(true, forKey: migrationKey)
+
+        guard defaults.object(forKey: "teale.solanaNetwork") != nil else {
+            defaults.set("mainnet", forKey: "teale.solanaNetwork")
+            return "mainnet"
+        }
+
+        let saved = defaults.string(forKey: "teale.solanaNetwork") ?? "devnet"
+        if saved == "devnet" && !defaults.bool(forKey: "teale.solanaWalletEnabled") {
+            defaults.set("mainnet", forKey: "teale.solanaNetwork")
+            return "mainnet"
+        }
+
+        return saved
     }
 
     // Auth
