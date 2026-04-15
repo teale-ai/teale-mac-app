@@ -189,11 +189,12 @@ public actor LlamaCppProvider: InferenceProvider {
         }
 
         if flashAttn {
-            args += ["--flash-attn"]
+            args += ["--flash-attn", "on"]
         }
 
-        if mmap {
-            args += ["--mmap"]
+        // mmap is enabled by default in llama.cpp; only pass --no-mmap when disabled
+        if !mmap {
+            args += ["--no-mmap"]
         }
 
         if reasoningOff {
@@ -223,11 +224,8 @@ public actor LlamaCppProvider: InferenceProvider {
         process.environment = env
 
         // Log server output for debugging
-        let logPath = FileManager.default.temporaryDirectory.appendingPathComponent("llama-server.log")
-        let logHandle = try? FileHandle(forWritingTo: logPath)
-        if logHandle == nil {
-            FileManager.default.createFile(atPath: logPath.path, contents: nil)
-        }
+        let logPath = URL(fileURLWithPath: "/tmp/llama-server.log")
+        FileManager.default.createFile(atPath: logPath.path, contents: nil)
         let outputHandle = (try? FileHandle(forWritingTo: logPath)) ?? FileHandle.nullDevice
         process.standardOutput = outputHandle
         process.standardError = outputHandle
@@ -235,8 +233,9 @@ public actor LlamaCppProvider: InferenceProvider {
         try process.run()
         serverProcess = process
 
-        // Wait for the server to become healthy (up to 120s for large models)
-        try await waitForHealth(timeoutSeconds: 120)
+        // Wait for the server to become healthy
+        // Large models (100B+) can take 10+ minutes to load into memory
+        try await waitForHealth(timeoutSeconds: 900)
     }
 
     private func stopServer() {
