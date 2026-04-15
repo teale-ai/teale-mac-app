@@ -7,7 +7,7 @@ import InferenceEngine
 // MARK: - Chat Completions Route
 
 enum ChatCompletionsRoute {
-    static func handle(request: Request, engine: InferenceEngineManager) async throws -> Response {
+    static func handle(request: Request, engine: InferenceEngineManager, onCompleted: RequestCompletedHandler? = nil) async throws -> Response {
         let body = try await request.body.collect(upTo: 1_048_576)
         let chatRequest = try JSONDecoder().decode(ChatCompletionRequest.self, from: body)
 
@@ -15,9 +15,9 @@ enum ChatCompletionsRoute {
 
         do {
             if isStreaming {
-                return try await handleStreaming(request: chatRequest, engine: engine)
+                return try await handleStreaming(request: chatRequest, engine: engine, onCompleted: onCompleted)
             } else {
-                return try await handleNonStreaming(request: chatRequest, engine: engine)
+                return try await handleNonStreaming(request: chatRequest, engine: engine, onCompleted: onCompleted)
             }
         } catch {
             if isNoModelAvailableError(error) {
@@ -38,9 +38,12 @@ enum ChatCompletionsRoute {
 
     private static func handleNonStreaming(
         request: ChatCompletionRequest,
-        engine: InferenceEngineManager
+        engine: InferenceEngineManager,
+        onCompleted: RequestCompletedHandler?
     ) async throws -> Response {
         let response = try await engine.generateFull(request: request)
+        let tokenCount = (response.choices.first?.message.content.count ?? 0) / 4
+        await onCompleted?(tokenCount)
         let data = try JSONEncoder().encode(response)
         return Response(
             status: .ok,
@@ -51,20 +54,25 @@ enum ChatCompletionsRoute {
 
     private static func handleStreaming(
         request: ChatCompletionRequest,
-        engine: InferenceEngineManager
+        engine: InferenceEngineManager,
+        onCompleted: RequestCompletedHandler?
     ) async throws -> Response {
         let stream = engine.generate(request: request)
         let encoder = JSONEncoder()
+        let completedHandler = onCompleted
 
         let responseBody = ResponseBody(contentLength: nil) { writer in
+            var tokenCount = 0
             do {
                 for try await chunk in stream {
+                    tokenCount += 1
                     let data = try encoder.encode(chunk)
                     if let str = String(data: data, encoding: .utf8) {
                         try await writer.write(.init(string: "data: \(str)\n\n"))
                     }
                 }
                 try await writer.write(.init(string: "data: [DONE]\n\n"))
+                await completedHandler?(tokenCount)
             } catch {
                 let errorMsg = "data: {\"error\": \"\(error.localizedDescription)\"}\n\n"
                 try await writer.write(.init(string: errorMsg))
