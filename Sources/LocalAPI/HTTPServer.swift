@@ -104,6 +104,14 @@ public actor LocalHTTPServer {
             return try await RemoteControlRoute.generatePTNInvite(request: request, controller: controller)
         }
 
+        router.post("/v1/app/ptn/issue-cert") { request, _ -> Response in
+            return try await RemoteControlRoute.issuePTNCert(request: request, controller: controller)
+        }
+
+        router.post("/v1/app/ptn/join-with-cert") { request, _ -> Response in
+            return try await RemoteControlRoute.joinPTNWithCert(request: request, controller: controller)
+        }
+
         let bindAddress = allowNetworkAccess ? "0.0.0.0" : "127.0.0.1"
         let app = Application(
             router: router,

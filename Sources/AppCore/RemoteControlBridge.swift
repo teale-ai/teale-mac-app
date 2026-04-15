@@ -2,6 +2,7 @@ import Foundation
 import SharedTypes
 import LocalAPI
 import LlamaCppKit
+import TealeNetKit
 
 @MainActor
 final class RemoteControlBridge: @unchecked Sendable, LocalAppControlling {
@@ -209,6 +210,36 @@ final class RemoteControlBridge: @unchecked Sendable, LocalAppControlling {
 
     func remoteGeneratePTNInvite(ptnID: String) async throws -> String {
         try appState.ptnManager.generateInviteToken(ptnID: ptnID)
+    }
+
+    func remoteIssuePTNCert(ptnID: String, nodeID: String, role: String) async throws -> Data {
+        let joinRequest = PTNJoinRequestPayload(
+            inviteToken: PTNInviteToken(ptnID: ptnID, ptnName: "", inviterNodeID: "", validForSeconds: 3600),
+            joinerNodeID: nodeID,
+            joinerDisplayName: "remote"
+        )
+        // Override the invite token's ptnID to match
+        var request = joinRequest
+        request.inviteToken = PTNInviteToken(
+            ptnID: ptnID,
+            ptnName: appState.ptnManager.memberships.first(where: { $0.ptnID == ptnID })?.ptnName ?? "",
+            inviterNodeID: appState.ptnManager.localNodeID,
+            validForSeconds: 3600
+        )
+        let response = try await appState.ptnManager.handleJoinRequest(request)
+        // Return the full join response as JSON (contains cert + ptnName + caPublicKey)
+        return try JSONEncoder().encode(response)
+    }
+
+    func remoteJoinPTNWithCert(certData: Data) async throws -> RemotePTNSnapshot {
+        let response = try JSONDecoder().decode(PTNJoinResponsePayload.self, from: certData)
+        let membership = try await appState.ptnManager.completeJoin(response: response)
+        return RemotePTNSnapshot(
+            ptnID: membership.ptnID,
+            ptnName: membership.ptnName,
+            role: membership.role.rawValue,
+            isCreator: membership.isCreator
+        )
     }
 
     private func appVersion() -> String {
