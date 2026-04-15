@@ -41,6 +41,7 @@ public final class AppState {
 
     // Engine
     public let engine: InferenceEngineManager
+    public let requestScheduler: RequestScheduler
 
     // Local inference providers
     private let localProvider: MLXProvider
@@ -298,6 +299,7 @@ public final class AppState {
             initialProvider = mlxProvider
         }
         self.engine = InferenceEngineManager(provider: initialProvider, throttler: throttler)
+        self.requestScheduler = RequestScheduler()
         self.modelManager = ModelManagerService(hardware: hw, maxStorageGB: persistedMaxStorage)
         self.demandTracker = ModelDemandTracker(catalog: modelManager.catalog, hardware: hw)
 
@@ -360,7 +362,23 @@ public final class AppState {
         self.wanManager.onInferenceRequest = { [weak self] payload, connection in
             guard let self else { return }
 
+            // Determine request source for WFQ scheduling
+            let source: RequestScheduler.RequestSource
+            if let groupID = payload.request.groupID,
+               self.ptnManager.isMember(of: groupID) {
+                source = .ptn(groupID)
+            } else {
+                source = .wwtn
+            }
+
             do {
+                // Queue the request — suspends until the scheduler grants a slot
+                try await self.requestScheduler.enqueue(
+                    request: payload.request,
+                    source: source,
+                    bidAmount: nil  // TODO: extract bid from request metadata
+                )
+
                 let provider = self.currentServingProvider()
                 let stream = provider.generate(request: payload.request)
                 for try await chunk in stream {
@@ -370,7 +388,11 @@ public final class AppState {
 
                 let complete = InferenceCompletePayload(requestID: payload.requestID)
                 try await connection.send(.inferenceComplete(complete))
+
+                // Release the scheduler slot
+                await self.requestScheduler.complete()
             } catch {
+                await self.requestScheduler.complete()
                 let response = InferenceErrorPayload(
                     requestID: payload.requestID,
                     errorMessage: error.localizedDescription
