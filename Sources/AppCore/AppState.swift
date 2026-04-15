@@ -281,7 +281,7 @@ public final class AppState {
         let ramGB = hw.totalRAMGB
         let llamaCppProvider = LlamaCppProvider(
             binaryPath: UserDefaults.standard.string(forKey: Self.llamaCppBinaryPathKey) ?? "llama-server",
-            contextSize: ramGB >= 128 ? 131072 : 65536,
+            contextSize: ramGB >= 128 ? 65536 : 32768,
             parallelSlots: ramGB >= 128 ? 4 : 1,
             flashAttn: ramGB >= 64,
             mmap: ramGB >= 64,

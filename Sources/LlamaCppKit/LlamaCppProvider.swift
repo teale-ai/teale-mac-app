@@ -201,14 +201,10 @@ public actor LlamaCppProvider: InferenceProvider {
             args += ["--reasoning", "off"]
         }
 
-        // YaRN scaling for context beyond training size
-        if contextSize > 40960 {
-            args += [
-                "--rope-scaling", "yarn",
-                "--yarn-orig-ctx", "40960",
-                "--override-kv", "qwen3.context_length=int:\(contextSize)",
-            ]
-        }
+        // RoPE scaling is handled by the model's GGUF metadata — llama-server reads
+        // the correct rope config automatically. Do NOT force --rope-scaling or
+        // --yarn-orig-ctx here; wrong values corrupt positional embeddings and cause
+        // incoherent output (e.g. Qwen3-235B-A22B already has YaRN baked in).
 
         args += extraArgs
 
