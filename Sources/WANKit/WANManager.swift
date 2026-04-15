@@ -149,6 +149,8 @@ public final class WANManager: @unchecked Sendable {
     // Configuration
     private var config: WANConfig?
     private var localDeviceInfo: DeviceInfo?
+    /// PTN memberships for this node, broadcast via discovery capabilities.
+    public var localPTNIDs: [PTNIdentifier] = []
 
     // Components
     private var relayClient: RelayClient?
@@ -168,6 +170,7 @@ public final class WANManager: @unchecked Sendable {
 
     // Callbacks
     public var onInferenceRequest: ((InferenceRequestPayload, WANTransportConnection) async -> Void)?
+    public var onPTNJoinRequest: ((PTNJoinRequestTransportPayload, WANTransportConnection) async -> Void)?
 
     public init() {}
 
@@ -419,17 +422,25 @@ public final class WANManager: @unchecked Sendable {
         connectedPeers.values.first { $0.peerInfo.hasModel(modelID) }
     }
 
-    func connectedPeerForInference(preferredModel modelID: String?, groupID: String? = nil) -> ConnectedWANPeer? {
+    func connectedPeerForInference(preferredModel modelID: String?, groupID: String? = nil, ptnID: String? = nil) -> ConnectedWANPeer? {
         let peerSummary = connectedPeers.values.map { "\($0.peerInfo.displayName): models=\($0.peerInfo.capabilities.loadedModels)" }
-        FileHandle.standardError.write(Data("[WAN] connectedPeerForInference: \(connectedPeers.count) peers, preferredModel=\(modelID ?? "nil") peers=[\(peerSummary.joined(separator: ", "))]\n".utf8))
-        // If a groupID is specified, try group peers first (group-first routing)
-        if let groupID {
-            let groupPeers = connectedPeers.values.filter { $0.peerInfo.organizationID == groupID }
-            let groupMatch: ConnectedWANPeer?
+        FileHandle.standardError.write(Data("[WAN] connectedPeerForInference: \(connectedPeers.count) peers, preferredModel=\(modelID ?? "nil") ptnID=\(ptnID ?? "nil") peers=[\(peerSummary.joined(separator: ", "))]\n".utf8))
+
+        // PTN-first routing: prefer peers that share a PTN membership
+        let effectivePTNID = ptnID ?? groupID
+        if let ptnID = effectivePTNID {
+            let ptnPeers = connectedPeers.values.filter { peer in
+                // Check ptnIDs array first, fall back to organizationID for backward compat
+                if let peerPTNs = peer.peerInfo.capabilities.ptnIDs {
+                    return peerPTNs.contains { $0.ptnID == ptnID }
+                }
+                return peer.peerInfo.organizationID == ptnID
+            }
+            let ptnMatch: ConnectedWANPeer?
             if let modelID {
-                groupMatch = groupPeers.first { $0.peerInfo.hasModel(modelID) }
+                ptnMatch = ptnPeers.first { $0.peerInfo.hasModel(modelID) }
             } else {
-                groupMatch = groupPeers
+                ptnMatch = ptnPeers
                     .filter { !$0.peerInfo.capabilities.loadedModels.isEmpty }
                     .sorted { lhs, rhs in
                         if lhs.latencyMs != rhs.latencyMs {
@@ -439,7 +450,7 @@ public final class WANManager: @unchecked Sendable {
                     }
                     .first
             }
-            if let peer = groupMatch { return peer }
+            if let peer = ptnMatch { return peer }
         }
 
         // Fall back to any peer
@@ -461,6 +472,11 @@ public final class WANManager: @unchecked Sendable {
     /// Check if any connected peer has a given model
     public func hasConnectedPeer(withModel modelID: String) -> Bool {
         connectedPeers.values.contains { $0.peerInfo.hasModel(modelID) }
+    }
+
+    /// Get a connected peer's transport connection by node ID.
+    public func connectedPeers(byNodeID nodeID: String) -> WANTransportConnection? {
+        connectedPeers[nodeID]?.connection
     }
 
     /// Get the best transport connection for a connected peer with the given model
@@ -598,6 +614,13 @@ public final class WANManager: @unchecked Sendable {
 
         case .inferenceChunk, .inferenceComplete, .inferenceError:
             // Handled by WANProvider
+            break
+
+        case .ptnJoinRequest(let payload):
+            await onPTNJoinRequest?(payload, peer.connection)
+
+        case .ptnJoinResponse:
+            // Handled by the joiner's PTNManager
             break
 
         default:

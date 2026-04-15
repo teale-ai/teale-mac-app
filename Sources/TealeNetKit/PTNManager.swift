@@ -12,8 +12,8 @@ public final class PTNManager: @unchecked Sendable {
     private let store = PTNStore()
 
     /// The local node's identity (Ed25519 public key hex).
-    private let localNodeID: String
-    private let localDisplayName: String
+    public let localNodeID: String
+    public let localDisplayName: String
 
     /// Pending join requests from other nodes (inviter side).
     public private(set) var pendingJoinRequests: [PTNJoinRequestPayload] = []

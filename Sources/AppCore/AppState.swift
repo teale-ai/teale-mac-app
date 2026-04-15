@@ -274,8 +274,14 @@ public final class AppState {
             preferredModelID: UserDefaults.standard.string(forKey: Self.exoPreferredModelIDKey)
         )
         self.exoProvider = exoProvider
+        let ramGB = hw.totalRAMGB
         let llamaCppProvider = LlamaCppProvider(
-            binaryPath: UserDefaults.standard.string(forKey: Self.llamaCppBinaryPathKey) ?? "llama-server"
+            binaryPath: UserDefaults.standard.string(forKey: Self.llamaCppBinaryPathKey) ?? "llama-server",
+            contextSize: ramGB >= 128 ? 131072 : 65536,
+            parallelSlots: ramGB >= 128 ? 4 : 1,
+            flashAttn: ramGB >= 64,
+            mmap: ramGB >= 64,
+            host: "0.0.0.0"
         )
         self.llamaCppProvider = llamaCppProvider
         let initialProvider: any InferenceProvider
@@ -366,6 +372,19 @@ public final class AppState {
                     errorMessage: error.localizedDescription
                 )
                 try? await connection.send(.inferenceError(response))
+            }
+        }
+
+        // Handle PTN join requests from remote peers
+        self.wanManager.onPTNJoinRequest = { [weak self] payload, connection in
+            guard let self else { return }
+            do {
+                let joinRequest = try JSONDecoder().decode(PTNJoinRequestPayload.self, from: payload.data)
+                let response = try await self.ptnManager.handleJoinRequest(joinRequest)
+                let responseData = try JSONEncoder().encode(response)
+                try await connection.send(.ptnJoinResponse(PTNJoinResponseTransportPayload(data: responseData)))
+            } catch {
+                FileHandle.standardError.write(Data("[PTN] Join request handling failed: \(error.localizedDescription)\n".utf8))
             }
         }
     }

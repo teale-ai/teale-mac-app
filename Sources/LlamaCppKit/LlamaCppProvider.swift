@@ -32,6 +32,18 @@ public actor LlamaCppProvider: InferenceProvider {
     /// KV cache quantization type (e.g. "q8_0", "f16").
     private var kvCacheType: String
 
+    /// Number of threads for computation.
+    private var threads: Int?
+
+    /// Enable flash attention.
+    private var flashAttn: Bool
+
+    /// Enable memory-mapped model loading.
+    private var mmap: Bool
+
+    /// Host to bind to (127.0.0.1 for local, 0.0.0.0 for network).
+    private var host: String
+
     /// Additional raw arguments to pass to llama-server.
     private var extraArgs: [String]
 
@@ -44,6 +56,10 @@ public actor LlamaCppProvider: InferenceProvider {
         batchSize: Int = 4096,
         reasoningOff: Bool = true,
         kvCacheType: String = "q8_0",
+        threads: Int? = nil,
+        flashAttn: Bool = false,
+        mmap: Bool = false,
+        host: String = "127.0.0.1",
         extraArgs: [String] = []
     ) {
         self.binaryPath = binaryPath
@@ -54,6 +70,10 @@ public actor LlamaCppProvider: InferenceProvider {
         self.batchSize = batchSize
         self.reasoningOff = reasoningOff
         self.kvCacheType = kvCacheType
+        self.threads = threads
+        self.flashAttn = flashAttn
+        self.mmap = mmap
+        self.host = host
         self.extraArgs = extraArgs
 
         let config = URLSessionConfiguration.default
@@ -120,6 +140,10 @@ public actor LlamaCppProvider: InferenceProvider {
         batchSize: Int? = nil,
         reasoningOff: Bool? = nil,
         kvCacheType: String? = nil,
+        threads: Int? = nil,
+        flashAttn: Bool? = nil,
+        mmap: Bool? = nil,
+        host: String? = nil,
         extraArgs: [String]? = nil
     ) {
         if let v = binaryPath { self.binaryPath = v }
@@ -130,6 +154,10 @@ public actor LlamaCppProvider: InferenceProvider {
         if let v = batchSize { self.batchSize = v }
         if let v = reasoningOff { self.reasoningOff = v }
         if let v = kvCacheType { self.kvCacheType = v }
+        if let v = threads { self.threads = v }
+        if let v = flashAttn { self.flashAttn = v }
+        if let v = mmap { self.mmap = v }
+        if let v = host { self.host = v }
         if let v = extraArgs { self.extraArgs = v }
     }
 
@@ -144,7 +172,7 @@ public actor LlamaCppProvider: InferenceProvider {
 
         var args = [
             "--model", modelPath,
-            "--host", "127.0.0.1",
+            "--host", host,
             "--port", "\(serverPort)",
             "--n-gpu-layers", "\(gpuLayers)",
             "--ctx-size", "\(contextSize)",
@@ -155,6 +183,18 @@ public actor LlamaCppProvider: InferenceProvider {
             "--cache-type-v", kvCacheType,
             "--no-webui",
         ]
+
+        if let threads {
+            args += ["--threads", "\(threads)"]
+        }
+
+        if flashAttn {
+            args += ["--flash-attn"]
+        }
+
+        if mmap {
+            args += ["--mmap"]
+        }
 
         if reasoningOff {
             args += ["--reasoning", "off"]
