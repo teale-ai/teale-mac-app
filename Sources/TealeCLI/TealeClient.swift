@@ -63,6 +63,19 @@ struct TealeClient {
         let _: Resp = try await post("/v1/app/ptn/leave", body: Body(ptn_id: ptnID))
     }
 
+    func issuePTNCert(ptnID: String, nodeID: String, role: String) async throws -> String {
+        struct Body: Encodable { var ptn_id: String; var node_id: String; var role: String }
+        let data = try await postRaw("/v1/app/ptn/issue-cert", body: Body(ptn_id: ptnID, node_id: nodeID, role: role))
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    func joinPTNWithCert(certData: String) async throws -> RemotePTNSnapshot {
+        guard let data = certData.data(using: .utf8) else {
+            throw TealeClientError.invalidResponse
+        }
+        return try await postRawBody("/v1/app/ptn/join-with-cert", body: data)
+    }
+
     // MARK: - API Keys
 
     func listAPIKeys() async throws -> [RemoteAPIKeySnapshot] {
@@ -111,6 +124,27 @@ struct TealeClient {
 
     func listPeers() async throws -> RemotePeersSnapshot {
         try await get("/v1/app/peers")
+    }
+
+    // MARK: - Agent
+
+    func agentProfile() async throws -> RemoteAgentProfileSnapshot? {
+        // Returns nil-able — 400 means no profile configured
+        do {
+            return try await get("/v1/app/agent/profile")
+        } catch TealeClientError.httpError(400) {
+            return nil
+        }
+    }
+
+    func agentDirectory() async throws -> [RemoteAgentDirectoryEntry] {
+        try await get("/v1/app/agent/directory")
+    }
+
+    func agentConversations() async throws -> [RemoteAgentConversationSnapshot] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try await get("/v1/app/agent/conversations", decoder: decoder)
     }
 
     // MARK: - Chat
@@ -190,6 +224,32 @@ struct TealeClient {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         }
         request.httpBody = try JSONEncoder().encode(body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try checkHTTP(response)
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    private func postRaw<B: Encodable>(_ path: String, body: B) async throws -> Data {
+        var request = URLRequest(url: baseURL.appending(path: path))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let apiKey {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try JSONEncoder().encode(body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try checkHTTP(response)
+        return data
+    }
+
+    private func postRawBody<T: Decodable>(_ path: String, body: Data) async throws -> T {
+        var request = URLRequest(url: baseURL.appending(path: path))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let apiKey {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = body
         let (data, response) = try await URLSession.shared.data(for: request)
         try checkHTTP(response)
         return try JSONDecoder().decode(T.self, from: data)

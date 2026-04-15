@@ -284,6 +284,40 @@ enum RemoteControlRoute {
         return try jsonResponse(await controller.remoteListPeers())
     }
 
+    // MARK: - Agent Routes
+
+    static func agentProfile(controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        if let profile = await controller.remoteAgentProfile() {
+            return try jsonResponse(profile)
+        }
+        return errorResponse(message: "No agent profile configured")
+    }
+
+    static func agentDirectory(controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        return try jsonResponse(await controller.remoteAgentDirectory())
+    }
+
+    static func agentConversations(controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        let conversations = await controller.remoteAgentConversations()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(conversations)
+        return Response(
+            status: .ok,
+            headers: [.contentType: "application/json"],
+            body: .init(byteBuffer: .init(data: data))
+        )
+    }
+
     private static func jsonResponse<T: Encodable>(_ value: T) throws -> Response {
         let data = try JSONEncoder().encode(value)
         return Response(
