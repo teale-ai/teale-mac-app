@@ -59,7 +59,7 @@ struct ChatView: View {
             }
             for (modelID, count) in wanModelCounts.sorted(by: { $0.value > $1.value }) {
                 guard !seenModelRepos.contains(modelID) else { continue }
-                let shortName = modelID.components(separatedBy: "/").last ?? modelID
+                let shortName = cleanModelDisplayName(modelID)
                 models.append(AvailableModel(
                     id: "wan-\(modelID)",
                     displayName: shortName,
@@ -274,7 +274,7 @@ struct ChatView: View {
                 Image(systemName: selectedPeerModel != nil ? "network" : "cpu")
                     .font(.caption2)
                 if let peerModel = selectedPeerModel {
-                    Text(peerModel.components(separatedBy: "/").last ?? peerModel)
+                    Text(cleanModelDisplayName(peerModel))
                         .font(.caption.weight(.medium))
                 } else if let model = loadedModel {
                     Text(model.name)
