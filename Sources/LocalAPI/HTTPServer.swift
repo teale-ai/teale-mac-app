@@ -104,6 +104,45 @@ public actor LocalHTTPServer {
             return try await RemoteControlRoute.generatePTNInvite(request: request, controller: controller)
         }
 
+        router.post("/v1/app/ptn/leave") { request, _ -> Response in
+            return try await RemoteControlRoute.leavePTN(request: request, controller: controller)
+        }
+
+        // API Key endpoints
+        router.get("/v1/app/apikeys") { _, _ -> Response in
+            return try await RemoteControlRoute.listAPIKeys(controller: controller)
+        }
+
+        router.post("/v1/app/apikeys") { request, _ -> Response in
+            return try await RemoteControlRoute.generateAPIKey(request: request, controller: controller)
+        }
+
+        router.post("/v1/app/apikeys/revoke") { request, _ -> Response in
+            return try await RemoteControlRoute.revokeAPIKey(request: request, controller: controller)
+        }
+
+        // Wallet endpoints
+        router.get("/v1/app/wallet") { _, _ -> Response in
+            return try await RemoteControlRoute.walletBalance(controller: controller)
+        }
+
+        router.get("/v1/app/wallet/transactions") { request, _ -> Response in
+            return try await RemoteControlRoute.walletTransactions(request: request, controller: controller)
+        }
+
+        router.post("/v1/app/wallet/send") { request, _ -> Response in
+            return try await RemoteControlRoute.walletSend(request: request, controller: controller)
+        }
+
+        router.get("/v1/app/wallet/solana") { _, _ -> Response in
+            return try await RemoteControlRoute.solanaStatus(controller: controller)
+        }
+
+        // Peers endpoint
+        router.get("/v1/app/peers") { _, _ -> Response in
+            return try await RemoteControlRoute.listPeers(controller: controller)
+        }
+
         let bindAddress = allowNetworkAccess ? "0.0.0.0" : "127.0.0.1"
         let app = Application(
             router: router,
