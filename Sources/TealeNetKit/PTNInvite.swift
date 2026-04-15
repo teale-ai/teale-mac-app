@@ -96,6 +96,7 @@ public enum PTNError: LocalizedError {
     case certificateVerificationFailed
     case joinRequestTimeout
     case joinRejected
+    case recoveryTooEarly(daysRemaining: Int)
 
     public var errorDescription: String? {
         switch self {
@@ -107,6 +108,7 @@ public enum PTNError: LocalizedError {
         case .certificateVerificationFailed: return "Certificate verification failed."
         case .joinRequestTimeout: return "Join request timed out. The inviter may be offline."
         case .joinRejected: return "Join request was rejected."
+        case .recoveryTooEarly(let days): return "Recovery not available yet. All admins must be absent for 30 days. \(days) day(s) remaining."
         }
     }
 }

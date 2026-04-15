@@ -182,4 +182,198 @@ public final class PTNManager: @unchecked Sendable {
     public func isMember(of ptnID: String) -> Bool {
         memberships.contains { $0.ptnID == ptnID && $0.isCertificateValid }
     }
+
+    // MARK: - Multi-Admin
+
+    /// Export the CA private key for a PTN (so another admin can import it).
+    /// Only the creator or an existing admin with the CA key can do this.
+    public func exportCAKey(ptnID: String) async throws -> Data {
+        guard let membership = memberships.first(where: { $0.ptnID == ptnID }) else {
+            throw PTNError.ptnNotFound
+        }
+        guard membership.role == .admin else {
+            throw PTNError.notPTNAdmin
+        }
+        guard let keyData = try await store.loadCAKey(ptnID: ptnID) else {
+            throw PTNError.caKeyNotFound
+        }
+        return keyData
+    }
+
+    /// Import a CA private key to become an admin of a PTN this device already belongs to.
+    /// The device must already be a member (have a valid certificate).
+    public func importCAKey(_ keyData: Data, ptnID: String) async throws {
+        guard var membership = memberships.first(where: { $0.ptnID == ptnID }) else {
+            throw PTNError.ptnNotFound
+        }
+
+        // Verify the key matches the PTN's CA public key
+        let ca = try PTNCertificateAuthority(privateKeyData: keyData)
+        guard ca.ptnID == ptnID else {
+            throw PTNError.certificateVerificationFailed
+        }
+
+        // Save the CA key and upgrade role to admin
+        try await store.saveCAKey(keyData, ptnID: ptnID)
+        membership.role = .admin
+        membership.isCreator = false // Not the original creator, but now an admin
+        try await store.save(membership)
+
+        if let idx = memberships.firstIndex(where: { $0.ptnID == ptnID }) {
+            memberships[idx] = membership
+        }
+    }
+
+    /// Promote a remote device to admin by issuing an admin certificate and
+    /// returning the CA key for them to import.
+    /// Returns (certificate JSON, CA key data) — caller sends both to the target device.
+    public func promoteToAdmin(ptnID: String, targetNodeID: String) async throws -> (certData: Data, caKeyData: Data) {
+        guard let membership = memberships.first(where: { $0.ptnID == ptnID }) else {
+            throw PTNError.ptnNotFound
+        }
+        guard membership.role == .admin else {
+            throw PTNError.notPTNAdmin
+        }
+        guard let caKeyData = try await store.loadCAKey(ptnID: ptnID) else {
+            throw PTNError.caKeyNotFound
+        }
+
+        let ca = try PTNCertificateAuthority(privateKeyData: caKeyData)
+        let cert = try ca.issueCertificate(
+            nodeID: targetNodeID,
+            role: .admin,
+            issuerNodeID: localNodeID
+        )
+
+        let response = PTNJoinResponsePayload(
+            certificate: cert,
+            ptnName: membership.ptnName,
+            caPublicKeyHex: membership.caPublicKeyHex
+        )
+        let certJSON = try JSONEncoder().encode(response)
+
+        return (certData: certJSON, caKeyData: caKeyData)
+    }
+
+    // MARK: - Recovery (all admins lost)
+
+    /// Recover a PTN when all admin devices are gone.
+    /// Creates a new CA keypair (new PTN ID), preserves the name, and
+    /// auto-issues certificates for all known member node IDs.
+    /// The recovering device becomes the new admin.
+    ///
+    /// Returns the new PTN membership and certificates for known members
+    /// (caller should distribute these to the other members).
+    /// Minimum days all admins must be absent before recovery is allowed.
+    public static let recoveryGracePeriodDays: Int = 30
+
+    public func recoverPTN(oldPTNID: String) async throws -> (newMembership: PTNMembershipInfo, memberCerts: [String: Data]) {
+        guard let oldMembership = memberships.first(where: { $0.ptnID == oldPTNID }) else {
+            throw PTNError.ptnNotFound
+        }
+
+        // Time gate: all admins must have been absent for 30+ days
+        if let lastSeen = oldMembership.lastAdminSeenAt {
+            let daysSinceAdmin = Date().timeIntervalSince(lastSeen) / 86400
+            if daysSinceAdmin < Double(Self.recoveryGracePeriodDays) {
+                let remaining = Self.recoveryGracePeriodDays - Int(daysSinceAdmin)
+                throw PTNError.recoveryTooEarly(daysRemaining: remaining)
+            }
+        } else {
+            // No admin ever seen — only allow if this device has been a member for 30+ days
+            let daysSinceJoin = Date().timeIntervalSince(oldMembership.joinedAt) / 86400
+            if daysSinceJoin < Double(Self.recoveryGracePeriodDays) {
+                let remaining = Self.recoveryGracePeriodDays - Int(daysSinceJoin)
+                throw PTNError.recoveryTooEarly(daysRemaining: remaining)
+            }
+        }
+
+        let knownMembers = oldMembership.knownMemberNodeIDs ?? []
+
+        // Create a new CA (new PTN ID, same name)
+        let ca = PTNCertificateAuthority()
+
+        // Self-sign admin cert for the recovering device
+        let adminCert = try ca.issueCertificate(
+            nodeID: localNodeID,
+            role: .admin,
+            issuerNodeID: localNodeID
+        )
+
+        let newMembership = PTNMembershipInfo(
+            ptnID: ca.ptnID,
+            ptnName: oldMembership.ptnName,
+            caPublicKeyHex: ca.ptnID,
+            certificate: adminCert,
+            role: .admin,
+            isCreator: true,
+            knownMemberNodeIDs: knownMembers
+        )
+
+        // Persist new PTN
+        try await store.save(newMembership)
+        try await store.saveCAKey(ca.privateKeyData, ptnID: ca.ptnID)
+
+        // Remove old PTN
+        try await store.delete(ptnID: oldPTNID)
+        memberships.removeAll { $0.ptnID == oldPTNID }
+        memberships.append(newMembership)
+
+        // Issue certs for known members
+        var memberCerts: [String: Data] = [:]
+        for nodeID in knownMembers where nodeID != localNodeID {
+            let cert = try ca.issueCertificate(
+                nodeID: nodeID,
+                role: .provider,
+                issuerNodeID: localNodeID
+            )
+            let response = PTNJoinResponsePayload(
+                certificate: cert,
+                ptnName: newMembership.ptnName,
+                caPublicKeyHex: ca.ptnID
+            )
+            memberCerts[nodeID] = try JSONEncoder().encode(response)
+        }
+
+        return (newMembership: newMembership, memberCerts: memberCerts)
+    }
+
+    // MARK: - Member Tracking
+
+    /// Update known members for a PTN (called when heartbeats reveal peer PTN membership).
+    public func updateKnownMembers(ptnID: String, memberNodeIDs: [String]) async {
+        guard var membership = memberships.first(where: { $0.ptnID == ptnID }) else { return }
+
+        var known = Set(membership.knownMemberNodeIDs ?? [])
+        known.formUnion(memberNodeIDs)
+        membership.knownMemberNodeIDs = Array(known)
+
+        try? await store.save(membership)
+        if let idx = memberships.firstIndex(where: { $0.ptnID == ptnID }) {
+            memberships[idx] = membership
+        }
+    }
+
+    /// Record that an admin was seen online for a PTN.
+    /// Called when heartbeats or discovery show a peer with admin role in this PTN.
+    public func updateAdminSeen(ptnID: String) async {
+        guard var membership = memberships.first(where: { $0.ptnID == ptnID }) else { return }
+        membership.lastAdminSeenAt = Date()
+        try? await store.save(membership)
+        if let idx = memberships.firstIndex(where: { $0.ptnID == ptnID }) {
+            memberships[idx] = membership
+        }
+    }
+
+    /// Check if recovery is available for a PTN (all admins absent for 30+ days).
+    public func isRecoveryAvailable(ptnID: String) -> Bool {
+        guard let membership = memberships.first(where: { $0.ptnID == ptnID }) else { return false }
+        guard membership.role != .admin else { return false } // Admins don't need recovery
+
+        if let lastSeen = membership.lastAdminSeenAt {
+            return Date().timeIntervalSince(lastSeen) / 86400 >= Double(Self.recoveryGracePeriodDays)
+        } else {
+            return Date().timeIntervalSince(membership.joinedAt) / 86400 >= Double(Self.recoveryGracePeriodDays)
+        }
+    }
 }

@@ -172,6 +172,42 @@ enum RemoteControlRoute {
         }
     }
 
+    // MARK: - PTN Admin Management
+
+    static func promoteAdmin(request: Request, controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else { return errorResponse(message: RemoteControlError.unsupported.localizedDescription) }
+        do {
+            let body = try await request.body.collect(upTo: 1_048_576)
+            struct PromoteRequest: Decodable { var ptn_id: String; var node_id: String }
+            let payload = try JSONDecoder().decode(PromoteRequest.self, from: body)
+            let data = try await controller.remotePromoteAdmin(ptnID: payload.ptn_id, targetNodeID: payload.node_id)
+            // Returns JSON with cert + ca_key_hex for the target to import
+            return Response(status: .ok, headers: [.contentType: "application/json"], body: .init(byteBuffer: .init(data: data)))
+        } catch { return errorResponse(message: error.localizedDescription) }
+    }
+
+    static func importCAKey(request: Request, controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else { return errorResponse(message: RemoteControlError.unsupported.localizedDescription) }
+        do {
+            let body = try await request.body.collect(upTo: 1_048_576)
+            struct ImportRequest: Decodable { var ptn_id: String; var ca_key_hex: String }
+            let payload = try JSONDecoder().decode(ImportRequest.self, from: body)
+            let ptn = try await controller.remoteImportCAKey(ptnID: payload.ptn_id, caKeyHex: payload.ca_key_hex)
+            return try jsonResponse(ptn)
+        } catch { return errorResponse(message: error.localizedDescription) }
+    }
+
+    static func recoverPTN(request: Request, controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else { return errorResponse(message: RemoteControlError.unsupported.localizedDescription) }
+        do {
+            let body = try await request.body.collect(upTo: 1_048_576)
+            struct RecoverRequest: Decodable { var ptn_id: String }
+            let payload = try JSONDecoder().decode(RecoverRequest.self, from: body)
+            let ptn = try await controller.remoteRecoverPTN(oldPTNID: payload.ptn_id)
+            return try jsonResponse(ptn)
+        } catch { return errorResponse(message: error.localizedDescription) }
+    }
+
     // MARK: - API Key Routes
 
     static func listAPIKeys(controller: (any LocalAppControlling)?) async throws -> Response {
@@ -282,6 +318,40 @@ enum RemoteControlRoute {
             return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
         }
         return try jsonResponse(await controller.remoteListPeers())
+    }
+
+    // MARK: - Agent Routes
+
+    static func agentProfile(controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        if let profile = await controller.remoteAgentProfile() {
+            return try jsonResponse(profile)
+        }
+        return errorResponse(message: "No agent profile configured")
+    }
+
+    static func agentDirectory(controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        return try jsonResponse(await controller.remoteAgentDirectory())
+    }
+
+    static func agentConversations(controller: (any LocalAppControlling)?) async throws -> Response {
+        guard let controller else {
+            return errorResponse(message: RemoteControlError.unsupported.localizedDescription)
+        }
+        let conversations = await controller.remoteAgentConversations()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(conversations)
+        return Response(
+            status: .ok,
+            headers: [.contentType: "application/json"],
+            body: .init(byteBuffer: .init(data: data))
+        )
     }
 
     private static func jsonResponse<T: Encodable>(_ value: T) throws -> Response {

@@ -3,6 +3,7 @@ import SharedTypes
 import LocalAPI
 import LlamaCppKit
 import TealeNetKit
+import AgentKit
 
 @MainActor
 final class RemoteControlBridge: @unchecked Sendable, LocalAppControlling {
@@ -296,6 +297,46 @@ final class RemoteControlBridge: @unchecked Sendable, LocalAppControlling {
         try await appState.ptnManager.leavePTN(ptnID: ptnID)
     }
 
+    func remotePromoteAdmin(ptnID: String, targetNodeID: String) async throws -> Data {
+        let (certData, caKeyData) = try await appState.ptnManager.promoteToAdmin(ptnID: ptnID, targetNodeID: targetNodeID)
+        // Return both the cert JSON and the CA key hex so the target can import both
+        struct PromoteResponse: Encodable {
+            var cert_json: String  // base64-encoded cert JSON
+            var ca_key_hex: String
+        }
+        let response = PromoteResponse(
+            cert_json: certData.base64EncodedString(),
+            ca_key_hex: caKeyData.map { String(format: "%02x", $0) }.joined()
+        )
+        return try JSONEncoder().encode(response)
+    }
+
+    func remoteImportCAKey(ptnID: String, caKeyHex: String) async throws -> RemotePTNSnapshot {
+        guard let keyData = Data(hexString: caKeyHex) else {
+            throw RemoteControlError.invalidSetting("Invalid hex-encoded CA key")
+        }
+        try await appState.ptnManager.importCAKey(keyData, ptnID: ptnID)
+        guard let membership = appState.ptnManager.memberships.first(where: { $0.ptnID == ptnID }) else {
+            throw RemoteControlError.invalidSetting("PTN not found after import")
+        }
+        return RemotePTNSnapshot(
+            ptnID: membership.ptnID,
+            ptnName: membership.ptnName,
+            role: membership.role.rawValue,
+            isCreator: membership.isCreator
+        )
+    }
+
+    func remoteRecoverPTN(oldPTNID: String) async throws -> RemotePTNSnapshot {
+        let (newMembership, _) = try await appState.ptnManager.recoverPTN(oldPTNID: oldPTNID)
+        return RemotePTNSnapshot(
+            ptnID: newMembership.ptnID,
+            ptnName: newMembership.ptnName,
+            role: newMembership.role.rawValue,
+            isCreator: newMembership.isCreator
+        )
+    }
+
     // MARK: - API Keys
 
     func remoteListAPIKeys() async -> [RemoteAPIKeySnapshot] {
@@ -394,6 +435,62 @@ final class RemoteControlBridge: @unchecked Sendable, LocalAppControlling {
         }
 
         return RemotePeersSnapshot(wanPeers: wanPeers, clusterPeers: clusterPeers)
+    }
+
+    // MARK: - Agent
+
+    func remoteAgentProfile() async -> RemoteAgentProfileSnapshot? {
+        guard let profile = appState.agentProfile else { return nil }
+        return RemoteAgentProfileSnapshot(
+            nodeID: profile.nodeID,
+            displayName: profile.displayName,
+            agentType: profile.agentType.rawValue,
+            bio: profile.bio,
+            capabilities: profile.capabilities.map(\.name)
+        )
+    }
+
+    func remoteAgentDirectory() async -> [RemoteAgentDirectoryEntry] {
+        let entries = await appState.agentManager.directory.allEntries()
+        return entries.map { entry in
+            RemoteAgentDirectoryEntry(
+                nodeID: entry.profile.nodeID,
+                displayName: entry.profile.displayName,
+                agentType: entry.profile.agentType.rawValue,
+                bio: entry.profile.bio,
+                capabilities: entry.profile.capabilities.map(\.name),
+                isOnline: entry.isOnline,
+                rating: entry.rating
+            )
+        }
+    }
+
+    func remoteAgentConversations() async -> [RemoteAgentConversationSnapshot] {
+        let conversations = await appState.agentManager.conversationStore.listConversations()
+        return conversations.map { conv in
+            let lastMsg: String? = conv.messages.last.map { msg in
+                switch msg.type {
+                case .intent(let p): return "intent: \(p.description)"
+                case .offer(let p): return "offer: \(p.description)"
+                case .counterOffer(let p): return "counter: \(p.description)"
+                case .accept: return "accepted"
+                case .reject(let p): return "rejected: \(p.reason)"
+                case .complete(let p): return "complete: \(p.outcome)"
+                case .review(let p): return "review: \(p.rating)/5"
+                case .chat(let p): return p.content
+                case .capability: return "capability exchange"
+                case .status(let p): return "status: \(p.message ?? "")"
+                }
+            }
+            return RemoteAgentConversationSnapshot(
+                id: conv.id,
+                participants: conv.participants,
+                state: conv.state.rawValue,
+                messageCount: conv.messages.count,
+                lastMessage: lastMsg,
+                updatedAt: conv.updatedAt
+            )
+        }
     }
 
     private func appVersion() -> String {

@@ -116,6 +116,18 @@ public actor LocalHTTPServer {
             return try await RemoteControlRoute.leavePTN(request: request, controller: controller)
         }
 
+        router.post("/v1/app/ptn/promote-admin") { request, _ -> Response in
+            return try await RemoteControlRoute.promoteAdmin(request: request, controller: controller)
+        }
+
+        router.post("/v1/app/ptn/import-ca-key") { request, _ -> Response in
+            return try await RemoteControlRoute.importCAKey(request: request, controller: controller)
+        }
+
+        router.post("/v1/app/ptn/recover") { request, _ -> Response in
+            return try await RemoteControlRoute.recoverPTN(request: request, controller: controller)
+        }
+
         // API Key endpoints
         router.get("/v1/app/apikeys") { _, _ -> Response in
             return try await RemoteControlRoute.listAPIKeys(controller: controller)
@@ -149,6 +161,19 @@ public actor LocalHTTPServer {
         // Peers endpoint
         router.get("/v1/app/peers") { _, _ -> Response in
             return try await RemoteControlRoute.listPeers(controller: controller)
+        }
+
+        // Agent endpoints
+        router.get("/v1/app/agent/profile") { _, _ -> Response in
+            return try await RemoteControlRoute.agentProfile(controller: controller)
+        }
+
+        router.get("/v1/app/agent/directory") { _, _ -> Response in
+            return try await RemoteControlRoute.agentDirectory(controller: controller)
+        }
+
+        router.get("/v1/app/agent/conversations") { _, _ -> Response in
+            return try await RemoteControlRoute.agentConversations(controller: controller)
         }
 
         let bindAddress = allowNetworkAccess ? "0.0.0.0" : "127.0.0.1"

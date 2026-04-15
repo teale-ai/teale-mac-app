@@ -13,6 +13,9 @@ public protocol LocalAppControlling: AnyObject {
     func remoteIssuePTNCert(ptnID: String, nodeID: String, role: String) async throws -> Data
     func remoteJoinPTNWithCert(certData: Data) async throws -> RemotePTNSnapshot
     func remoteLeavePTN(ptnID: String) async throws
+    func remotePromoteAdmin(ptnID: String, targetNodeID: String) async throws -> Data
+    func remoteImportCAKey(ptnID: String, caKeyHex: String) async throws -> RemotePTNSnapshot
+    func remoteRecoverPTN(oldPTNID: String) async throws -> RemotePTNSnapshot
     func remoteListAPIKeys() async -> [RemoteAPIKeySnapshot]
     func remoteGenerateAPIKey(name: String) async -> RemoteAPIKeySnapshot
     func remoteRevokeAPIKey(id: UUID) async
@@ -21,6 +24,9 @@ public protocol LocalAppControlling: AnyObject {
     func remoteWalletSend(amount: Double, toPeer: String, memo: String?) async throws -> Bool
     func remoteSolanaStatus() async -> RemoteSolanaSnapshot
     func remoteListPeers() async -> RemotePeersSnapshot
+    func remoteAgentProfile() async -> RemoteAgentProfileSnapshot?
+    func remoteAgentDirectory() async -> [RemoteAgentDirectoryEntry]
+    func remoteAgentConversations() async -> [RemoteAgentConversationSnapshot]
 }
 
 public struct RemotePTNSnapshot: Codable, Sendable {
@@ -297,6 +303,62 @@ public struct RemotePeerSnapshot: Codable, Sendable {
         self.displayName = displayName
         self.loadedModels = loadedModels
         self.source = source
+    }
+}
+
+// MARK: - Agent Types
+
+public struct RemoteAgentProfileSnapshot: Codable, Sendable {
+    public var nodeID: String
+    public var displayName: String
+    public var agentType: String
+    public var bio: String
+    public var capabilities: [String]
+
+    public init(nodeID: String, displayName: String, agentType: String, bio: String, capabilities: [String]) {
+        self.nodeID = nodeID
+        self.displayName = displayName
+        self.agentType = agentType
+        self.bio = bio
+        self.capabilities = capabilities
+    }
+}
+
+public struct RemoteAgentDirectoryEntry: Codable, Sendable {
+    public var nodeID: String
+    public var displayName: String
+    public var agentType: String
+    public var bio: String
+    public var capabilities: [String]
+    public var isOnline: Bool
+    public var rating: Double?
+
+    public init(nodeID: String, displayName: String, agentType: String, bio: String, capabilities: [String], isOnline: Bool, rating: Double? = nil) {
+        self.nodeID = nodeID
+        self.displayName = displayName
+        self.agentType = agentType
+        self.bio = bio
+        self.capabilities = capabilities
+        self.isOnline = isOnline
+        self.rating = rating
+    }
+}
+
+public struct RemoteAgentConversationSnapshot: Codable, Sendable {
+    public var id: UUID
+    public var participants: [String]
+    public var state: String
+    public var messageCount: Int
+    public var lastMessage: String?
+    public var updatedAt: Date
+
+    public init(id: UUID, participants: [String], state: String, messageCount: Int, lastMessage: String? = nil, updatedAt: Date) {
+        self.id = id
+        self.participants = participants
+        self.state = state
+        self.messageCount = messageCount
+        self.lastMessage = lastMessage
+        self.updatedAt = updatedAt
     }
 }
 
