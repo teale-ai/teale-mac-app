@@ -326,7 +326,7 @@ struct SettingsView: View {
                             get: { appState.electricityMarginMultiplier },
                             set: { appState.electricityMarginMultiplier = $0 }
                         ),
-                        in: 0.5...3.0,
+                        in: 0.0...3.0,
                         step: 0.1
                     )
                     Text(marginLabel)
@@ -334,7 +334,7 @@ struct SettingsView: View {
                         .frame(width: 60, alignment: .trailing)
                 }
 
-                Text("Floor price multiplier over electricity cost. 1.0× = break even, >1.0× = profit, <1.0× = subsidize to attract requests.")
+                Text("Floor price multiplier over electricity cost. 0.0× = donate inference for free, 1.0× = break even, >1.0× = profit. Nonprofit PTNs can set 0.0× so members donate compute for good causes.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -423,8 +423,10 @@ struct SettingsView: View {
 
     private var marginLabel: String {
         let m = appState.electricityMarginMultiplier
-        if m < 1.0 {
-            return String(format: "%.1f× (loss)", m)
+        if m == 0 {
+            return "0.0× (free)"
+        } else if m < 1.0 {
+            return String(format: "%.1f× (donate)", m)
         } else if m == 1.0 {
             return "1.0× (break even)"
         } else {
