@@ -319,7 +319,22 @@ struct SettingsView: View {
                         .font(.caption.weight(.medium))
                 }
 
-                Text("Sets the floor price for WWTN inference. You'll never earn less than your electricity cost + 20% margin.")
+                HStack {
+                    Text("Margin")
+                    Slider(
+                        value: Binding(
+                            get: { appState.electricityMarginMultiplier },
+                            set: { appState.electricityMarginMultiplier = $0 }
+                        ),
+                        in: 0.5...3.0,
+                        step: 0.1
+                    )
+                    Text(marginLabel)
+                        .font(.caption.weight(.medium))
+                        .frame(width: 60, alignment: .trailing)
+                }
+
+                Text("Floor price multiplier over electricity cost. 1.0× = break even, >1.0× = profit, <1.0× = subsidize to attract requests.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -403,6 +418,18 @@ struct SettingsView: View {
             exoBaseURL = appState.exoBaseURL
             exoPreferredModelID = appState.exoPreferredModelID
             maxStorage = appState.maxStorageGB
+        }
+    }
+
+    private var marginLabel: String {
+        let m = appState.electricityMarginMultiplier
+        if m < 1.0 {
+            return String(format: "%.1f× (loss)", m)
+        } else if m == 1.0 {
+            return "1.0× (break even)"
+        } else {
+            let pct = Int((m - 1.0) * 100)
+            return String(format: "%.1f× (+%d%%)", m, pct)
         }
     }
 

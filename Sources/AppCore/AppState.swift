@@ -185,6 +185,10 @@ public final class AppState {
     public var electricityCurrency: String = UserDefaults.standard.string(forKey: "teale.electricityCurrency") ?? "USD" {
         didSet { UserDefaults.standard.set(electricityCurrency, forKey: "teale.electricityCurrency") }
     }
+    /// Margin multiplier over electricity cost. 1.0 = break even, 1.3 = 30% profit, <1.0 = willing to subsidize.
+    public var electricityMarginMultiplier: Double = UserDefaults.standard.object(forKey: "teale.electricityMarginMultiplier") as? Double ?? 1.2 {
+        didSet { UserDefaults.standard.set(electricityMarginMultiplier, forKey: "teale.electricityMarginMultiplier") }
+    }
 
     private var isUpdatingWANToggle: Bool = false
 
