@@ -191,10 +191,13 @@ public struct GGUFModelInfo: Identifiable, Sendable {
     private func inferFamily() -> String {
         let lower = filename.lowercased()
         let families: [(String, String)] = [
+            // Check specific model names before generic families
+            ("hermes", "Llama"), ("codellama", "CodeLlama"),
+            ("minimax", "MiniMax"),
             ("llama", "Llama"), ("mistral", "Mistral"), ("mixtral", "Mixtral"),
             ("phi", "Phi"), ("gemma", "Gemma"), ("qwen", "Qwen"),
             ("deepseek", "DeepSeek"), ("falcon", "Falcon"), ("yi", "Yi"),
-            ("solar", "Solar"), ("starcoder", "StarCoder"), ("codellama", "CodeLlama"),
+            ("solar", "Solar"), ("starcoder", "StarCoder"),
             ("command", "Command-R"), ("mamba", "Mamba"), ("rwkv", "RWKV"),
             ("internlm", "InternLM"), ("olmo", "OLMo"), ("stablelm", "StableLM"),
         ]

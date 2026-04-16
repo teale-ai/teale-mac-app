@@ -12,11 +12,13 @@ public struct DeviceModelProfileRegistry: Sendable {
     public static let profiles: [DeviceModelProfile] = [
 
         // ════════════════════════════════════════════════════════════════════
-        // Ultra Desktop (M*Ultra, 64-192 GB) — maximize quality and throughput
+        // Ultra Desktop (M*Ultra, 64-192+ GB) — maximize quality and throughput
         // ════════════════════════════════════════════════════════════════════
 
+        // --- 256GB+ Ultra: flagship models with large context ---
         DeviceModelProfile(
             deviceClass: .ultraDesktop,
+            minRAMGB: 256,
             params: InferenceProfile(
                 contextSize: 65536,
                 kvCacheType: "q8_0",
@@ -26,7 +28,70 @@ public struct DeviceModelProfileRegistry: Sendable {
                 parallelSlots: 4,
                 gpuLayers: 999
             ),
-            notes: "Ultra desktop default — full quality, high throughput"
+            notes: "Ultra 256GB+ — flagship models, full quality, high throughput"
+        ),
+
+        // MiniMax M2.7 on 256GB+ Ultra: ~243GB model, needs q4 KV for context headroom
+        DeviceModelProfile(
+            deviceClass: .ultraDesktop,
+            modelFamily: "MiniMax",
+            minRAMGB: 256,
+            params: InferenceProfile(
+                contextSize: 32768,
+                kvCacheType: "q4_0",
+                batchSize: 2048,
+                flashAttn: true,
+                mmap: true,
+                parallelSlots: 2
+            ),
+            notes: "MiniMax M2.7 Q8 (~243GB) on 512GB Ultra — q4 KV to leave room for 32K context"
+        ),
+
+        // Qwen3-235B on 256GB+ Ultra: MoE, ~233GB weights, generous context
+        DeviceModelProfile(
+            deviceClass: .ultraDesktop,
+            modelFamily: "Qwen",
+            minRAMGB: 256,
+            params: InferenceProfile(
+                contextSize: 65536,
+                kvCacheType: "q8_0",
+                parallelSlots: 4,
+                reasoningOff: true
+            ),
+            notes: "Qwen3-235B on 512GB Ultra — MoE is memory-efficient, full context"
+        ),
+
+        // --- 64-192GB Ultra: mid-tier, must budget carefully ---
+        DeviceModelProfile(
+            deviceClass: .ultraDesktop,
+            maxRAMGB: 256,
+            params: InferenceProfile(
+                contextSize: 32768,
+                kvCacheType: "q8_0",
+                batchSize: 4096,
+                flashAttn: true,
+                mmap: true,
+                parallelSlots: 2,
+                gpuLayers: 999
+            ),
+            notes: "Ultra 64-192GB — good throughput, conservative context to leave KV headroom"
+        ),
+
+        // Llama 70B on 96GB Ultra: tested at 96K ctx (16GB KV), fits with ~6GB headroom
+        DeviceModelProfile(
+            deviceClass: .ultraDesktop,
+            modelFamily: "Llama",
+            minRAMGB: 80,
+            maxRAMGB: 128,
+            params: InferenceProfile(
+                contextSize: 98304,
+                kvCacheType: "q8_0",
+                batchSize: 4096,
+                flashAttn: true,
+                mmap: true,
+                parallelSlots: 1
+            ),
+            notes: "Llama-70B Q8 on 96GB Ultra — 96K context verified stable, single slot for headroom"
         ),
 
         // Llama 4 Scout 109B on Ultra: still memory-heavy, dial back context
@@ -43,18 +108,22 @@ public struct DeviceModelProfileRegistry: Sendable {
             notes: "109B MoE needs memory headroom even on Ultra"
         ),
 
-        // Qwen models on Ultra: disable reasoning by default
+        // Qwen models on Ultra (64-192GB): disable reasoning, conservative context
         DeviceModelProfile(
             deviceClass: .ultraDesktop,
             modelFamily: "Qwen",
+            maxRAMGB: 256,
             params: InferenceProfile(
+                contextSize: 32768,
                 reasoningOff: true
             ),
-            notes: "Qwen3 thinking mode consumes tokens rapidly; disable by default"
+            notes: "Qwen on mid-tier Ultra — reasoning off, 32K context to conserve memory"
         ),
 
         // ════════════════════════════════════════════════════════════════════
         // Max Desktop (M*Max, 32-128 GB) — high-end, slightly constrained
+        // Memory bandwidth: ~400 GB/s (M2 Max), ~600 GB/s (M3/M4 Max)
+        // Rule of thumb: leave 20-25% RAM free for KV cache + system
         // ════════════════════════════════════════════════════════════════════
 
         DeviceModelProfile(
@@ -70,6 +139,19 @@ public struct DeviceModelProfileRegistry: Sendable {
                 gpuLayers: 999
             ),
             notes: "Max desktop 48GB+ — full offload, good throughput"
+        ),
+
+        // Qwen3-32B Q8 (~34GB) on 64GB Max: sweet spot, room for 32K context
+        DeviceModelProfile(
+            deviceClass: .maxDesktop,
+            modelFamily: "Qwen",
+            minRAMGB: 48,
+            params: InferenceProfile(
+                contextSize: 32768,
+                kvCacheType: "q8_0",
+                reasoningOff: true
+            ),
+            notes: "Qwen3-32B Q8 on 64GB Max — ~12 tok/s, 32K context fits comfortably"
         ),
 
         DeviceModelProfile(
@@ -100,18 +182,10 @@ public struct DeviceModelProfileRegistry: Sendable {
             notes: "Qwen 32B on 32GB Max — minimal context to fit"
         ),
 
-        DeviceModelProfile(
-            deviceClass: .maxDesktop,
-            modelFamily: "Qwen",
-            minRAMGB: 48,
-            params: InferenceProfile(
-                reasoningOff: true
-            ),
-            notes: "Qwen on 48GB+ Max — default settings, reasoning off"
-        ),
-
         // ════════════════════════════════════════════════════════════════════
         // Pro Laptop (M*Pro, 16-48 GB) — mainstream power user
+        // Memory bandwidth: ~200 GB/s (M2 Pro), ~300 GB/s (M3/M4 Pro)
+        // 16GB M2 Pro: ~14 tok/s with 8B Q4 model, good for chat
         // ════════════════════════════════════════════════════════════════════
 
         DeviceModelProfile(
@@ -133,39 +207,39 @@ public struct DeviceModelProfileRegistry: Sendable {
             deviceClass: .proLaptop,
             maxRAMGB: 32,
             params: InferenceProfile(
-                contextSize: 16384,
+                contextSize: 32768,
                 kvCacheType: "q4_0",
                 batchSize: 1024,
-                flashAttn: true,
+                flashAttn: false,
                 mmap: false,
                 parallelSlots: 1,
                 gpuLayers: 999
             ),
-            notes: "Pro 16-18GB — constrained, q4 KV cache"
+            notes: "Pro 16-18GB — q4 KV cache, 32K context fits with small models"
         ),
 
-        // 8B models on Pro 16GB fit well, can afford more context
+        // Hermes-8B Q4 on 16GB Pro: ~5GB model, plenty of room for 32K context
         DeviceModelProfile(
             deviceClass: .proLaptop,
-            modelID: "llama-3.1-8b-instruct-4bit",
+            modelFamily: "Llama",
             maxRAMGB: 32,
             params: InferenceProfile(
                 contextSize: 32768,
                 kvCacheType: "q4_0"
             ),
-            notes: "8B Llama on 16GB Pro — small enough for 32K context"
+            notes: "8B Llama/Hermes on 16GB Pro — small model, 32K context fits easily"
         ),
 
         DeviceModelProfile(
             deviceClass: .proLaptop,
-            modelID: "qwen3-8b-4bit",
+            modelFamily: "Qwen",
             maxRAMGB: 32,
             params: InferenceProfile(
                 contextSize: 32768,
                 kvCacheType: "q4_0",
                 reasoningOff: true
             ),
-            notes: "8B Qwen on 16GB Pro — fits 32K with q4 KV"
+            notes: "Qwen 8B on 16GB Pro — fits 32K with q4 KV, reasoning off"
         ),
 
         DeviceModelProfile(
