@@ -56,6 +56,25 @@ public struct WANPeerInfo: Codable, Sendable, Identifiable {
     public func hasModel(_ modelID: String) -> Bool {
         capabilities.loadedModels.contains(modelID)
     }
+
+    /// Placeholder for peers discovered via offer before full discovery completes.
+    public static func unknown(nodeID: String) -> WANPeerInfo {
+        WANPeerInfo(
+            nodeID: nodeID,
+            publicKey: nodeID,
+            displayName: "Unknown Peer",
+            capabilities: NodeCapabilities(
+                hardware: HardwareCapability(
+                    chipFamily: .unknown,
+                    chipName: "Unknown",
+                    totalRAMGB: 0,
+                    gpuCoreCount: 0,
+                    memoryBandwidthGBs: 0,
+                    tier: .tier4
+                )
+            )
+        )
+    }
 }
 
 // MARK: - Peer Endpoint

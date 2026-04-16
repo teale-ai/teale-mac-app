@@ -716,38 +716,13 @@ public final class WANManager: @unchecked Sendable {
 
     private func handleIncomingOffer(_ offer: RelayMessage.OfferPayload) async {
         guard let nat = natTraversal, let config = config else { return }
-
-        // Check peer limit
         guard connectedPeers.count < config.maxWANPeers else { return }
-
-        // Don't accept if already connected
         guard connectedPeers[offer.fromNodeID] == nil else { return }
-
+        let peerInfo = await discoveryService?.peers.first(where: { $0.nodeID == offer.fromNodeID })
+            ?? WANPeerInfo.unknown(nodeID: offer.fromNodeID)
         do {
-            guard let connection = try await nat.handleIncomingOffer(offer: offer) else {
-                // Direct connection failed — the initiator will fall back to relay
-                // and send relayOpen, which handleIncomingRelayOpen will process.
-                wanLog("Direct connection from \(offer.fromNodeID.prefix(16))... failed, waiting for relay fallback")
-                return
-            }
-
-            // Look up peer info from discovery
-            let peerInfo = await discoveryService?.peer(byNodeID: offer.fromNodeID) ?? WANPeerInfo(
-                nodeID: offer.fromNodeID,
-                publicKey: offer.fromNodeID,
-                displayName: "Unknown Peer",
-                capabilities: NodeCapabilities(
-                    hardware: HardwareCapability(
-                        chipFamily: .unknown,
-                        chipName: "Unknown",
-                        totalRAMGB: 0,
-                        gpuCoreCount: 0,
-                        memoryBandwidthGBs: 0,
-                        tier: .tier4
-                    )
-                )
-            )
-
+            // Try direct P2P first
+            let connection = try await nat.handleIncomingOffer(offer: offer)
             let connected = ConnectedWANPeer(
                 peerInfo: peerInfo,
                 connection: .direct(connection),
@@ -755,71 +730,52 @@ public final class WANManager: @unchecked Sendable {
                 lastHeartbeat: Date()
             )
             connectedPeers[offer.fromNodeID] = connected
-            startListening(to: connected)
-            updateState(mapping: state.publicEndpoint, natType: state.natType)
-
-            // If we got a placeholder, trigger a discovery refresh so we learn about this peer sooner
-            if peerInfo.displayName == "Unknown Peer" {
-                Task { [weak self] in
-                    try? await self?.discoveryService?.refresh()
-                }
-            }
         } catch {
-            wanLog("handleIncomingOffer error: \(error.localizedDescription)")
+            // Direct P2P failed — fall back to relay
+            FileHandle.standardError.write(Data("[WAN] Direct connection from \(offer.fromNodeID.prefix(16)) failed: \(error). Trying relay fallback...\n".utf8))
+            do {
+                let relayConn = try await relayClient!.openRelayedSession(
+                    toNodeID: offer.fromNodeID,
+                    sessionID: offer.sessionID,
+                    timeoutSeconds: config.connectionTimeoutSeconds
+                )
+                let connected = ConnectedWANPeer(
+                    peerInfo: peerInfo,
+                    connection: .relayed(relayConn),
+                    connectionType: .relayed,
+                    lastHeartbeat: Date()
+                )
+                connectedPeers[offer.fromNodeID] = connected
+                FileHandle.standardError.write(Data("[WAN] Relay fallback succeeded for \(offer.fromNodeID.prefix(16))!\n".utf8))
+            } catch {
+                FileHandle.standardError.write(Data("[WAN] Relay fallback also failed for \(offer.fromNodeID.prefix(16)): \(error)\n".utf8))
+            }
         }
+        updateState()
     }
 
     private func handleIncomingRelayOpen(_ payload: RelayMessage.RelaySessionPayload) async {
-        wanLog("handleIncomingRelayOpen: from=\(payload.fromNodeID.prefix(16))... to=\(payload.toNodeID.prefix(16))... session=\(payload.sessionID.prefix(8))")
-        guard let relay = relayClient, let config = config else { wanLog("  -> skip: no relay/config"); return }
-        guard payload.toNodeID == config.identity.nodeID else { wanLog("  -> skip: not for us (toNodeID mismatch)"); return }
-        guard connectedPeers.count < config.maxWANPeers else { wanLog("  -> skip: max peers"); return }
-        guard connectedPeers[payload.fromNodeID] == nil else { wanLog("  -> skip: already connected"); return }
-
-        do {
-            let connection = try await relay.acceptRelayedSession(
-                fromNodeID: payload.fromNodeID,
-                sessionID: payload.sessionID
-            )
-
-            let peerInfo = await discoveryService?.peer(byNodeID: payload.fromNodeID) ?? WANPeerInfo(
-                nodeID: payload.fromNodeID,
-                publicKey: payload.fromNodeID,
-                displayName: "Unknown Peer",
-                capabilities: NodeCapabilities(
-                    hardware: HardwareCapability(
-                        chipFamily: .unknown,
-                        chipName: "Unknown",
-                        totalRAMGB: 0,
-                        gpuCoreCount: 0,
-                        memoryBandwidthGBs: 0,
-                        tier: .tier4
-                    )
+        // Accept relay sessions initiated by supply nodes
+        if connectedPeers[payload.fromNodeID] == nil {
+            do {
+                let connection = try await relayClient!.acceptRelayedSession(
+                    fromNodeID: payload.fromNodeID,
+                    sessionID: payload.sessionID
                 )
-            )
-
-            let connected = ConnectedWANPeer(
-                peerInfo: peerInfo,
-                connection: .relayed(connection),
-                connectionType: .relayed,
-                lastHeartbeat: Date()
-            )
-            connectedPeers[payload.fromNodeID] = connected
-            startListening(to: connected)
-            updateState(mapping: state.publicEndpoint, natType: state.natType)
-
-            // If we got a placeholder, trigger a discovery refresh so we learn about this peer sooner
-            if peerInfo.displayName == "Unknown Peer" {
-                Task { [weak self] in
-                    try? await self?.discoveryService?.refresh()
-                }
+                let peerInfo = await discoveryService?.peers.first(where: { $0.nodeID == payload.fromNodeID })
+                    ?? WANPeerInfo.unknown(nodeID: payload.fromNodeID)
+                let connected = ConnectedWANPeer(
+                    peerInfo: peerInfo,
+                    connection: .relayed(connection),
+                    connectionType: .relayed,
+                    lastHeartbeat: Date()
+                )
+                connectedPeers[payload.fromNodeID] = connected
+                startListening(to: connected)
+                updateState()
+            } catch {
+                FileHandle.standardError.write(Data("[WAN] Failed to accept relayOpen from \(payload.fromNodeID.prefix(16)): \(error)\n".utf8))
             }
-        } catch {
-            await relay.closeRelayedSession(
-                sessionID: payload.sessionID,
-                toNodeID: payload.fromNodeID,
-                notifyRemote: false
-            )
         }
     }
 
@@ -983,6 +939,10 @@ public final class WANManager: @unchecked Sendable {
     }
 
     // MARK: - State Updates
+
+    private func updateState() {
+        updateState(mapping: state.publicEndpoint, natType: state.natType)
+    }
 
     private func updateState(mapping: NATMapping?, natType: NATType) {
         let summaries = connectedPeerSummaries
