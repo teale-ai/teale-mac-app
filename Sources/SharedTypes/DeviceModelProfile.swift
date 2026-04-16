@@ -26,6 +26,8 @@ extension ChipFamily {
             return .baseMac
         case .a14, .a15, .a16, .a17Pro, .a18, .a18Pro, .a19Pro:
             return .mobile
+        case .tensorG4:
+            return .mobile
         case .nvidiaGPU, .amdGPU, .intelCPU, .amdCPU, .armGeneric, .unknown:
             return .other
         }

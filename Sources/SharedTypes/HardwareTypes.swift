@@ -10,6 +10,8 @@ public enum ChipFamily: String, Codable, Sendable {
     case m4, m4Pro, m4Max, m4Ultra
     // Apple Silicon — iPhone/iPad
     case a14, a15, a16, a17Pro, a18, a18Pro, a19Pro
+    // Google Tensor
+    case tensorG4      // Google Tensor G4 (Pixel 9)
     // Non-Apple (cross-platform teale-node)
     case nvidiaGPU     // NVIDIA GPU (CUDA)
     case amdGPU        // AMD GPU (ROCm)
@@ -18,9 +20,15 @@ public enum ChipFamily: String, Codable, Sendable {
     case armGeneric    // ARM64 (non-Apple, e.g. Snapdragon, Raspberry Pi)
     case unknown
 
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        self = ChipFamily(rawValue: rawValue) ?? .unknown
+    }
+
     public var isAppleSilicon: Bool {
         switch self {
-        case .nvidiaGPU, .amdGPU, .intelCPU, .amdCPU, .armGeneric, .unknown:
+        case .nvidiaGPU, .amdGPU, .intelCPU, .amdCPU, .armGeneric, .tensorG4, .unknown:
             return false
         default:
             return true
@@ -39,6 +47,7 @@ public enum ChipFamily: String, Codable, Sendable {
         case .a17Pro: return 17
         case .a18, .a18Pro: return 18
         case .a19Pro: return 19
+        case .tensorG4: return 4
         case .nvidiaGPU, .amdGPU, .intelCPU, .amdCPU, .armGeneric, .unknown: return 0
         }
     }
@@ -178,6 +187,7 @@ public struct HardwareCapability: Codable, Sendable {
         case .amdGPU:               return 250 // Typical AMD GPU TDP
         case .intelCPU:             return 65  // Typical desktop CPU
         case .amdCPU:               return 65  // Typical desktop CPU
+        case .tensorG4:             return 8   // Google Tensor G4 (Pixel 9)
         case .armGeneric:           return 10  // Low-power ARM (Snapdragon, RPi)
         case .unknown:              return 30  // Conservative estimate
         }

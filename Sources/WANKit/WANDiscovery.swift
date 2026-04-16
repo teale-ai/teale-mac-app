@@ -38,6 +38,20 @@ public struct WANPeerInfo: Codable, Sendable, Identifiable {
         self.organizationID = organizationID
     }
 
+    // Decode with defaults for fields the relay may not include (e.g. from cross-platform nodes)
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        nodeID = try container.decode(String.self, forKey: .nodeID)
+        publicKey = try container.decode(String.self, forKey: .publicKey)
+        wgPublicKey = try container.decodeIfPresent(String.self, forKey: .wgPublicKey)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        capabilities = try container.decode(NodeCapabilities.self, forKey: .capabilities)
+        lastSeen = try container.decodeIfPresent(Date.self, forKey: .lastSeen) ?? Date()
+        natType = try container.decodeIfPresent(NATType.self, forKey: .natType) ?? .unknown
+        endpoints = try container.decodeIfPresent([PeerEndpoint].self, forKey: .endpoints) ?? []
+        organizationID = try container.decodeIfPresent(String.self, forKey: .organizationID)
+    }
+
     /// Whether this peer has a specific model loaded
     public func hasModel(_ modelID: String) -> Bool {
         capabilities.loadedModels.contains(modelID)
