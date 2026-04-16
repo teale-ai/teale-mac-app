@@ -12,9 +12,10 @@ struct ChatView: View {
     @State private var showModelPicker: Bool = false
     @State private var selectedPeerModel: String?
 
-    /// Unified model entry for the picker — local or WAN
+    /// Unified model entry for the picker — local, LAN cluster, or WAN
     private enum ModelSource {
         case local(ModelDescriptor)
+        case lan(modelID: String, deviceCount: Int)
         case wan(modelID: String, deviceCount: Int)
     }
 
@@ -49,7 +50,28 @@ struct ChatView: View {
             seenModelRepos.insert(model.huggingFaceRepo)
         }
 
-        // WAN peer models (grouped by model, skip if already available locally)
+        // LAN cluster peer models (grouped by model, skip if already available locally)
+        if appState.clusterEnabled {
+            var lanModelCounts: [String: Int] = [:]
+            for peer in appState.clusterManager.topology.connectedPeers {
+                for model in peer.loadedModels {
+                    lanModelCounts[model, default: 0] += 1
+                }
+            }
+            for (modelID, count) in lanModelCounts.sorted(by: { $0.value > $1.value }) {
+                guard !seenModelRepos.contains(modelID) else { continue }
+                let shortName = cleanModelDisplayName(modelID)
+                models.append(AvailableModel(
+                    id: "lan-\(modelID)",
+                    displayName: shortName,
+                    source: .lan(modelID: modelID, deviceCount: count),
+                    isLoaded: selectedPeerModel == modelID
+                ))
+                seenModelRepos.insert(modelID)
+            }
+        }
+
+        // WAN peer models (grouped by model, skip if already available locally/LAN)
         if appState.wanEnabled {
             var wanModelCounts: [String: Int] = [:]
             for peer in appState.wanManager.state.connectedPeers {
@@ -217,6 +239,24 @@ struct ChatView: View {
         !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var selectedPeerModelIcon: String {
+        guard let peerModel = selectedPeerModel else { return "memorychip" }
+        let models = allAvailableModels
+        if let entry = models.first(where: {
+            switch $0.source {
+            case .lan(let id, _), .wan(let id, _): return id == peerModel
+            default: return false
+            }
+        }) {
+            switch entry.source {
+            case .lan: return "cable.connector"
+            case .wan: return "globe"
+            default: return "memorychip"
+            }
+        }
+        return "globe"
+    }
+
     // MARK: - Model Picker
 
     @ViewBuilder
@@ -234,15 +274,21 @@ struct ChatView: View {
                         case .local(let descriptor):
                             selectedPeerModel = nil
                             Task { await switchModel(descriptor) }
-                        case .wan(let modelID, _):
+                        case .lan(let modelID, _), .wan(let modelID, _):
                             selectedPeerModel = modelID
                         }
                     } label: {
                         HStack {
                             switch entry.source {
                             case .local:
-                                Label(entry.displayName, systemImage: "cpu")
+                                Label(entry.displayName, systemImage: "memorychip")
                                 Text("Free")
+                                    .foregroundStyle(.secondary)
+                            case .lan(_, let count):
+                                Label(entry.displayName, systemImage: "cable.connector")
+                                Text("Free")
+                                    .foregroundStyle(.secondary)
+                                Text("\(count) device\(count == 1 ? "" : "s")")
                                     .foregroundStyle(.secondary)
                             case .wan(_, let count):
                                 Label(entry.displayName, systemImage: "globe")
@@ -271,7 +317,7 @@ struct ChatView: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: selectedPeerModel != nil ? "network" : "cpu")
+                Image(systemName: selectedPeerModelIcon)
                     .font(.caption2)
                 if let peerModel = selectedPeerModel {
                     Text(cleanModelDisplayName(peerModel))
