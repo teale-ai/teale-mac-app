@@ -27,6 +27,10 @@ swift build --product teale
 open Package.swift
 ```
 
+## Release
+
+Released macOS builds are Developer ID signed and Apple-notarized, so Gatekeeper opens them without the right-click workaround. See [docs/apple-deployment.md](docs/apple-deployment.md) for the full signing + notarization + TestFlight pipeline.
+
 ## Architecture
 
 13 Swift modules: SharedTypes, HardwareProfile, MLXInference, ModelManager, InferenceEngine, ClusterKit, WANKit, CreditKit, AgentKit, AuthKit, LocalAPI, InferencePoolApp, TealeCompanion.
