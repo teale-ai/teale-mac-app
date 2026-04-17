@@ -99,6 +99,13 @@ struct SettingsView: View {
                 Text(appState.loc("settings.keepAwakeHelp"))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+
+                Toggle("Contribute compute to the Teale network", isOn: $state.contributeCompute)
+                Text(appState.contributeCompute
+                     ? "This Mac will serve inference to LAN and WAN peers when it has spare capacity."
+                     : "This Mac will use Teale as a chat client only and will not respond to incoming inference requests.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
 
             Section("Inference Backend") {

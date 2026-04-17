@@ -16,6 +16,7 @@ import WalletKit
 import LlamaCppKit
 import TealeNetKit
 import CompilerKit
+import ChatKit
 
 // MARK: - App State
 
@@ -149,10 +150,17 @@ public final class AppState {
     public var allowNetworkAccess: Bool = UserDefaults.standard.bool(forKey: "teale.allowNetworkAccess") {
         didSet { UserDefaults.standard.set(allowNetworkAccess, forKey: "teale.allowNetworkAccess") }
     }
+    /// Master opt-out for serving inference to other nodes. When false, this Mac acts purely as a chat client
+    /// and will not respond to incoming LAN/WAN inference requests. Default true so existing nodes keep contributing.
+    public var contributeCompute: Bool = UserDefaults.standard.object(forKey: "teale.contributeCompute") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(contributeCompute, forKey: "teale.contributeCompute") }
+    }
     public let apiKeyStore = APIKeyStore()
 
-    // Chat
-    public let conversationStore = ConversationStore()
+    // Chat (ChatKit — unified 1:1 + group storage with E2E P2P crypto)
+    public let chatService: ChatService
+    public let currentUserID: UUID
+    public let toolRegistry = ToolRegistry()
 
     // UI State
     public var selectedModel: ModelDescriptor?
@@ -361,6 +369,19 @@ public final class AppState {
         }
         self.agentManager = AgentManager()
 
+        // Chat — stable local user ID for ChatKit messaging.
+        // Upgraded to the authenticated user ID once Supabase auth resolves.
+        let chatUserID: UUID
+        if let raw = UserDefaults.standard.string(forKey: "teale.chatUserID"),
+           let uuid = UUID(uuidString: raw) {
+            chatUserID = uuid
+        } else {
+            chatUserID = UUID()
+            UserDefaults.standard.set(chatUserID.uuidString, forKey: "teale.chatUserID")
+        }
+        self.currentUserID = chatUserID
+        self.chatService = ChatService(currentUserID: chatUserID, localNodeID: Self.stableNodeID())
+
         // Wallet placeholder — replaced async on launch
         self.wallet = USDCWallet.placeholder()
         self.maxStorageGB = persistedMaxStorage
@@ -379,6 +400,16 @@ public final class AppState {
 
         self.clusterManager.onInferenceRequest = { [weak self, clusterManager] payload, peer in
             guard let self else { return }
+
+            // Honor the master "Contribute compute" opt-out.
+            if !self.contributeCompute {
+                let response = InferenceErrorPayload(
+                    requestID: payload.requestID,
+                    errorMessage: "This node is not contributing compute."
+                )
+                try? await peer.connection.send(.inferenceError(response))
+                return
+            }
 
             clusterManager.beginServingInference()
             defer { clusterManager.endServingInference() }
@@ -411,6 +442,16 @@ public final class AppState {
 
         self.wanManager.onInferenceRequest = { [weak self] payload, connection in
             guard let self else { return }
+
+            // Honor the master "Contribute compute" opt-out.
+            if !self.contributeCompute {
+                let response = InferenceErrorPayload(
+                    requestID: payload.requestID,
+                    errorMessage: "This node is not contributing compute."
+                )
+                try? await connection.send(.inferenceError(response))
+                return
+            }
 
             // Determine request source for WFQ scheduling
             let source: RequestScheduler.RequestSource
@@ -470,12 +511,56 @@ public final class AppState {
                 FileHandle.standardError.write(Data("[PTN] Join request handling failed: \(error.localizedDescription)\n".utf8))
             }
         }
+
+        // Route AI agent inference through the shared engine (local + LAN + WAN).
+        let inferenceStream: @Sendable (ChatCompletionRequest) -> AsyncThrowingStream<String, Error> = { [weak self] request in
+            AsyncThrowingStream { continuation in
+                Task { @MainActor [weak self] in
+                    guard let self else {
+                        continuation.finish()
+                        return
+                    }
+                    do {
+                        let stream = self.engine.generate(request: request)
+                        for try await chunk in stream {
+                            if let content = chunk.choices.first?.delta.content {
+                                continuation.yield(content)
+                            }
+                        }
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                }
+            }
+        }
+
+        // Register orchestrator tools.
+        self.toolRegistry.register(CalendarToolHandler())
+        self.toolRegistry.register(SubAgentDispatchHandler(inferenceStream: inferenceStream))
+        self.chatService.aiParticipant.toolRegistry = self.toolRegistry
+        self.chatService.aiParticipant.onInferenceRequest = inferenceStream
     }
 
     /// Call once at app launch to initialize async components (auth, credit ledger, agent)
     public func initializeAsync() async {
         // Load PTN memberships
         await ptnManager.loadMemberships()
+
+        // Load saved chat conversations; ensure a default DM with the AI exists
+        // so the user always has a conversation to open.
+        await chatService.loadConversations()
+        if chatService.conversations.isEmpty {
+            _ = await chatService.createDM(
+                with: UUID(),
+                title: "Teale",
+                agentConfig: AgentConfig(
+                    autoRespond: true,
+                    mentionOnly: false,
+                    persona: "assistant"
+                )
+            )
+        }
 
         // Restore power assertion if keep-awake was enabled
         if keepAwake { updatePowerAssertion() }

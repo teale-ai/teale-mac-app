@@ -225,6 +225,7 @@ let package = Package(
                 "CreditKit",
                 "AgentKit",
                 "AuthKit",
+                "ChatKit",
             ],
             exclude: ["Info.plist", "InferencePool.entitlements"]
         ),

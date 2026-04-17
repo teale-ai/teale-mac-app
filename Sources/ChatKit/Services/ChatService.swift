@@ -144,6 +144,55 @@ public final class ChatService {
         }
     }
 
+    /// Encrypt and broadcast a tool-call message originating from the AI.
+    /// Content is JSON-encoded so remote participants can re-render it.
+    public func insertToolCall(_ call: ToolCall, conversationID: UUID) async {
+        let data = (try? JSONEncoder().encode(call)) ?? Data()
+        let content = String(data: data, encoding: .utf8) ?? "{}"
+        await insertAgentMessage(content: content, messageType: .toolCall, conversationID: conversationID)
+    }
+
+    /// Encrypt and broadcast a tool-result message originating from the AI.
+    public func insertToolResult(_ outcome: ToolOutcome, conversationID: UUID) async {
+        let data = (try? JSONEncoder().encode(outcome)) ?? Data()
+        let content = String(data: data, encoding: .utf8) ?? "{}"
+        await insertAgentMessage(content: content, messageType: .toolResult, conversationID: conversationID)
+    }
+
+    /// Shared encryption + broadcast path for agent-originated messages.
+    private func insertAgentMessage(
+        content: String,
+        messageType: MessageType,
+        conversationID: UUID
+    ) async {
+        do {
+            var senderKey = await keyManager.mySenderKey(for: conversationID)
+            let payload = try GroupCrypto.encrypt(content, using: &senderKey)
+            await keyManager.storeSenderKey(senderKey, for: conversationID)
+
+            let stored = StoredMessage(
+                conversationID: conversationID,
+                senderNodeID: localNodeID,
+                senderID: nil,
+                payload: payload,
+                messageType: messageType
+            )
+
+            await messageStore.append(stored, groupID: conversationID)
+            let data = try JSONEncoder().encode(GroupMessagePayload(message: stored))
+            await onBroadcast?(data, conversationID)
+
+            if activeConversation?.id == conversationID {
+                let decrypted = DecryptedMessage(message: stored.toMessage(), content: content)
+                if !activeMessages.contains(where: { $0.id == stored.id }) {
+                    activeMessages.append(decrypted)
+                }
+            }
+        } catch {
+            // Agent message encryption/broadcast failed — swallow silently.
+        }
+    }
+
     /// Encrypt and broadcast an AI response.
     public func insertAIMessage(_ content: String, conversationID: UUID) async {
         do {
@@ -203,11 +252,16 @@ public final class ChatService {
     // MARK: - Create Conversation
 
     /// Create a new group conversation (stored locally).
-    public func createGroup(title: String, memberIDs: [UUID]) async -> Conversation? {
+    public func createGroup(
+        title: String,
+        memberIDs: [UUID],
+        agentConfig: AgentConfig = .default
+    ) async -> Conversation? {
         let conversation = Conversation(
             type: .group,
             title: title,
-            createdBy: currentUserID
+            createdBy: currentUserID,
+            agentConfig: agentConfig
         )
         conversations.insert(conversation, at: 0)
         saveConversations()
@@ -215,14 +269,38 @@ public final class ChatService {
     }
 
     /// Create a DM conversation (stored locally).
-    public func createDM(with otherUserID: UUID) async -> Conversation? {
+    public func createDM(
+        with otherUserID: UUID,
+        title: String? = nil,
+        agentConfig: AgentConfig = .default
+    ) async -> Conversation? {
         let conversation = Conversation(
             type: .dm,
-            createdBy: currentUserID
+            title: title,
+            createdBy: currentUserID,
+            agentConfig: agentConfig
         )
         conversations.insert(conversation, at: 0)
         saveConversations()
         return conversation
+    }
+
+    // MARK: - Update
+
+    /// Update a conversation's title and agent config; persists the change.
+    public func updateConversation(
+        id: UUID,
+        title: String?,
+        agentConfig: AgentConfig
+    ) async {
+        guard let idx = conversations.firstIndex(where: { $0.id == id }) else { return }
+        conversations[idx].title = title
+        conversations[idx].agentConfig = agentConfig
+        conversations[idx].updatedAt = Date()
+        if activeConversation?.id == id {
+            activeConversation = conversations[idx]
+        }
+        saveConversations()
     }
 
     // MARK: - Leave

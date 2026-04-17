@@ -151,7 +151,6 @@ struct GroupChatView: View {
         Task {
             await chatService?.sendMessage(text)
 
-            // Check if AI should respond
             if let chatService,
                let lastMessage = chatService.activeMessages.last,
                chatService.aiParticipant.shouldRespond(
@@ -159,15 +158,11 @@ struct GroupChatView: View {
                    config: conversation.agentConfig,
                    currentUserID: appState.currentUserID
                ) {
-                let response = await chatService.aiParticipant.generateResponse(
+                await chatService.aiParticipant.runTurn(
                     conversation: conversation,
-                    messages: chatService.activeMessages,
-                    participants: chatService.activeParticipants,
-                    tools: []
+                    chatService: chatService,
+                    participants: chatService.activeParticipants
                 )
-                if let response {
-                    await chatService.insertAIMessage(response, conversationID: conversation.id)
-                }
             }
 
             isSending = false

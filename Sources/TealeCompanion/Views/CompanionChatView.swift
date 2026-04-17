@@ -7,6 +7,8 @@ struct CompanionChatView: View {
     @State private var inputText = ""
     @State private var isGenerating = false
 
+    private var chatService: ChatService { appState.chatService }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -17,23 +19,44 @@ struct CompanionChatView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 12) {
-                            if appState.conversationStore.activeMessages.isEmpty {
+                            if chatService.activeMessages.isEmpty {
                                 emptyStateView
                             } else {
-                                ForEach(appState.conversationStore.activeMessages) { message in
+                                ForEach(chatService.activeMessages) { message in
                                     MessageBubbleView(message: message)
                                         .id(message.id)
                                 }
                             }
+
+                            if chatService.aiParticipant.isGenerating && !chatService.aiParticipant.streamingText.isEmpty {
+                                MessageBubbleView(
+                                    message: DecryptedMessage(
+                                        message: Message(
+                                            id: UUID(),
+                                            conversationID: chatService.activeConversation?.id ?? UUID(),
+                                            senderID: nil,
+                                            encryptedContent: "",
+                                            encryptionKeyID: "",
+                                            messageType: .aiResponse,
+                                            createdAt: Date()
+                                        ),
+                                        content: chatService.aiParticipant.streamingText
+                                    )
+                                )
+                                .id("streaming")
+                            }
                         }
                         .padding()
                     }
-                    .onChange(of: appState.conversationStore.activeMessages.count) {
-                        if let last = appState.conversationStore.activeMessages.last {
+                    .onChange(of: chatService.activeMessages.count) {
+                        if let last = chatService.activeMessages.last {
                             withAnimation {
                                 proxy.scrollTo(last.id, anchor: .bottom)
                             }
                         }
+                    }
+                    .onChange(of: chatService.aiParticipant.streamingText) {
+                        withAnimation { proxy.scrollTo("streaming", anchor: .bottom) }
                     }
                 }
 
@@ -58,13 +81,33 @@ struct CompanionChatView: View {
                 #endif
                 ToolbarItem(placement: .automatic) {
                     Button {
-                        _ = appState.conversationStore.createConversation(title: "New Chat")
-                        appState.conversationStore.activeConversation = appState.conversationStore.conversations.first
+                        Task { await newChat() }
                     } label: {
                         Image(systemName: "square.and.pencil")
                     }
                 }
             }
+            .task {
+                if chatService.activeConversation == nil,
+                   let first = chatService.conversations.first {
+                    await chatService.openConversation(first)
+                }
+            }
+        }
+    }
+
+    private func newChat() async {
+        let created = await chatService.createDM(
+            with: UUID(),
+            title: "New Chat",
+            agentConfig: AgentConfig(
+                autoRespond: true,
+                mentionOnly: false,
+                persona: "assistant"
+            )
+        )
+        if let created {
+            await chatService.openConversation(created)
         }
     }
 
@@ -321,35 +364,114 @@ struct CompanionChatView: View {
 // MARK: - Message Bubble
 
 private struct MessageBubbleView: View {
-    let message: CompanionMessage
+    let message: DecryptedMessage
+
+    var body: some View {
+        switch message.messageType {
+        case .toolCall:
+            CompanionToolCallRow(content: message.content)
+        case .toolResult:
+            CompanionToolResultRow(content: message.content)
+        default:
+            CompanionTextBubble(message: message)
+        }
+    }
+}
+
+private struct CompanionTextBubble: View {
+    let message: DecryptedMessage
+
+    private var isAI: Bool { message.isFromAgent }
+    private var isUser: Bool { !isAI && message.messageType == .text }
 
     var body: some View {
         HStack {
-            if message.role == .user { Spacer(minLength: 48) }
+            if isUser { Spacer(minLength: 48) }
 
-            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
-                Text(message.content)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(bubbleBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
-                    .foregroundStyle(message.role == .user ? .white : .primary)
+            VStack(alignment: isUser ? .trailing : .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(MessageContentSegmenter.segments(message.content).enumerated()), id: \.offset) { _, segment in
+                        switch segment {
+                        case .text(let t):
+                            Text(t)
+                                .textSelection(.enabled)
+                        case .code(_, let code):
+                            Text(code)
+                                .font(.callout.monospaced())
+                                .textSelection(.enabled)
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.black.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(bubbleBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 18))
+                .foregroundStyle(isUser ? .white : .primary)
 
-                Text(message.timestamp, style: .time)
+                Text(message.createdAt, style: .time)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
 
-            if message.role == .assistant { Spacer(minLength: 48) }
+            if !isUser { Spacer(minLength: 48) }
         }
     }
 
     private var bubbleBackground: some ShapeStyle {
-        if message.role == .user {
+        if isUser {
             return AnyShapeStyle(Color.teale)
+        } else if isAI {
+            return AnyShapeStyle(Color.tealeLight)
         } else {
             return AnyShapeStyle(Color.gray.opacity(0.15))
         }
+    }
+}
+
+private struct CompanionToolCallRow: View {
+    let content: String
+
+    private var call: ToolCall? {
+        guard let data = content.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(ToolCall.self, from: data)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "wrench.and.screwdriver.fill")
+                .foregroundStyle(.orange)
+            Text("Calling \(call?.tool ?? "tool")…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+    }
+}
+
+private struct CompanionToolResultRow: View {
+    let content: String
+
+    private var outcome: ToolOutcome? {
+        guard let data = content.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(ToolOutcome.self, from: data)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: outcome?.success == false ? "exclamationmark.triangle.fill" : "checkmark.seal.fill")
+                .foregroundStyle(outcome?.success == false ? .red : .green)
+            Text(outcome?.content ?? content)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
     }
 }

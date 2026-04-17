@@ -1,53 +1,123 @@
 import Foundation
 import SharedTypes
 
-// MARK: - AI Participant
+// MARK: - AI Participant (Orchestrator)
 
 /// Manages AI agent behavior in conversations.
-/// Decides when to respond, builds context, and triggers inference.
+/// Decides when to respond, runs the orchestrator tool loop, persists tool-call / tool-result / ai-response messages.
 @MainActor
 @Observable
 public final class AIParticipant {
-    /// Whether the AI is currently generating a response
+    /// Whether the AI is currently generating a response.
     public private(set) var isGenerating: Bool = false
-    /// Streaming text from the current generation
+    /// Streaming text from the current inference pass.
     public private(set) var streamingText: String = ""
 
-    /// Callback to route inference requests. Set by the app layer.
-    /// Takes a ChatCompletionRequest, returns an async stream of token strings.
+    /// Inference routing callback set by the app layer.
     public var onInferenceRequest: ((ChatCompletionRequest) -> AsyncThrowingStream<String, Error>)?
+
+    /// Optional tool registry for orchestrator tool calls.
+    public var toolRegistry: ToolRegistry?
+
+    /// Maximum number of tool-call iterations before the orchestrator gives up.
+    public var maxIterations: Int = 4
 
     public init() {}
 
     // MARK: - Should Respond
 
-    /// Determine if the AI agent should respond to a new decrypted message.
     public func shouldRespond(
         to message: DecryptedMessage,
         config: AgentConfig,
         currentUserID: UUID
     ) -> Bool {
-        // Never respond to own AI messages or system messages
         guard !message.isFromAgent else { return false }
         guard message.messageType == .text else { return false }
 
-        // Check for @mention (case-insensitive)
         let lower = message.content.lowercased()
         let isMentioned = lower.contains("@teale") || lower.contains("@agent")
 
-        // Default: only respond when mentioned
         if config.mentionOnly || !config.autoRespond {
             return isMentioned
         }
-
-        // autoRespond mode (opt-in, not default)
         return true
     }
 
-    // MARK: - Generate Response
+    // MARK: - Orchestrator Turn
 
-    /// Generate an AI response for the conversation.
-    /// Returns the full response text, or nil if inference is unavailable.
+    /// Execute one orchestrator turn: iterate inference + tool calls, persisting each
+    /// `.toolCall` / `.toolResult` / `.aiResponse` through `chatService`.
+    public func runTurn(
+        conversation: Conversation,
+        chatService: ChatService,
+        participants: [ParticipantInfo]
+    ) async {
+        guard let onInferenceRequest else { return }
+
+        isGenerating = true
+        defer {
+            isGenerating = false
+            streamingText = ""
+        }
+
+        for _ in 0..<maxIterations {
+            streamingText = ""
+
+            let request = buildRequest(
+                conversation: conversation,
+                messages: chatService.activeMessages,
+                participants: participants,
+                toolSchemas: toolRegistry?.schemas() ?? []
+            )
+
+            var fullResponse = ""
+            do {
+                for try await token in onInferenceRequest(request) {
+                    fullResponse += token
+                    streamingText = fullResponse
+                }
+            } catch {
+                if fullResponse.isEmpty {
+                    await chatService.insertAIMessage("[Inference error: \(error.localizedDescription)]", conversationID: conversation.id)
+                    return
+                }
+            }
+
+            // Parse a tool call out of the response, if any.
+            if let (call, textBefore) = ToolCallParser.extract(from: fullResponse),
+               let registry = toolRegistry, !registry.isEmpty {
+
+                let prefix = textBefore.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !prefix.isEmpty {
+                    await chatService.insertAIMessage(prefix, conversationID: conversation.id)
+                }
+
+                await chatService.insertToolCall(call, conversationID: conversation.id)
+                let outcome = await registry.execute(call)
+                await chatService.insertToolResult(outcome, conversationID: conversation.id)
+
+                // Continue the loop — next iteration sees tool result in context.
+                continue
+            }
+
+            // No tool call — treat as the final response.
+            let trimmed = fullResponse.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                await chatService.insertAIMessage(trimmed, conversationID: conversation.id)
+            }
+            return
+        }
+
+        await chatService.insertAIMessage(
+            "(orchestrator hit the maximum of \(maxIterations) tool iterations)",
+            conversationID: conversation.id
+        )
+    }
+
+    // MARK: - Legacy API (kept for iOS group chat path that calls generateResponse directly)
+
+    /// Single-pass generation — returns the full response, no tool loop.
+    /// Prefer `runTurn` for the orchestrator path.
     public func generateResponse(
         conversation: Conversation,
         messages: [DecryptedMessage],
@@ -67,22 +137,18 @@ public final class AIParticipant {
             conversation: conversation,
             messages: messages,
             participants: participants,
-            tools: tools
+            toolSchemas: toolRegistry?.schemas() ?? []
         )
 
         var fullResponse = ""
         do {
-            let stream = onInferenceRequest(request)
-            for try await token in stream {
+            for try await token in onInferenceRequest(request) {
                 fullResponse += token
                 streamingText = fullResponse
             }
         } catch {
-            if fullResponse.isEmpty {
-                return nil
-            }
+            if fullResponse.isEmpty { return nil }
         }
-
         return fullResponse.isEmpty ? nil : fullResponse
     }
 
@@ -92,31 +158,43 @@ public final class AIParticipant {
         conversation: Conversation,
         messages: [DecryptedMessage],
         participants: [ParticipantInfo],
-        tools: [ConversationToolSummary]
+        toolSchemas: [ToolSchema]
     ) -> ChatCompletionRequest {
         let systemPrompt = buildSystemPrompt(
             conversation: conversation,
             participants: participants,
-            tools: tools
+            toolSchemas: toolSchemas
         )
 
         var apiMessages = [APIMessage(role: "system", content: systemPrompt)]
 
-        // Convert recent messages to API format (budget: last 50 messages)
+        // Convert recent messages to API format (budget: last 50 messages).
         let recentMessages = messages.suffix(50)
         for msg in recentMessages {
             let role: String
-            switch msg.messageType {
-            case .text: role = "user"
-            case .aiResponse: role = "assistant"
-            case .system, .toolCall, .toolResult: role = "system"
-            }
-
             var content = msg.content
-            // Prefix user messages with sender name in group chats
-            if conversation.type == .group && msg.messageType == .text, let senderID = msg.senderID {
-                let senderName = participants.first { $0.participant.userID == senderID }?.displayName ?? "User"
-                content = "[\(senderName)] \(content)"
+
+            switch msg.messageType {
+            case .text:
+                role = "user"
+                if conversation.type == .group, let senderID = msg.senderID {
+                    let senderName = participants.first { $0.participant.userID == senderID }?.displayName ?? "User"
+                    content = "[\(senderName)] \(content)"
+                }
+            case .aiResponse:
+                role = "assistant"
+            case .toolCall:
+                // Feed the model's own prior tool-call output back as assistant text
+                // so it can continue the conversation with the tool result in view.
+                role = "assistant"
+                content = "<tool_call>\(content)</tool_call>"
+            case .toolResult:
+                // Tool results come back as user-role observations — a common convention
+                // that keeps the "assistant acts, user observes" alternation clean.
+                role = "user"
+                content = "<tool_result>\(content)</tool_result>"
+            case .system:
+                role = "system"
             }
 
             apiMessages.append(APIMessage(role: role, content: content))
@@ -132,33 +210,32 @@ public final class AIParticipant {
     private func buildSystemPrompt(
         conversation: Conversation,
         participants: [ParticipantInfo],
-        tools: [ConversationToolSummary]
+        toolSchemas: [ToolSchema]
     ) -> String {
         var parts: [String] = []
 
-        // Base identity
         let chatType = conversation.type == .dm ? "direct message" : "group conversation"
         let title = conversation.title ?? "a conversation"
         parts.append("You are Teale, an AI assistant in \(chatType) called \"\(title)\".")
 
-        // Participants
         if !participants.isEmpty {
             let names = participants.map { "\($0.displayName) (\($0.participant.role.rawValue))" }
             parts.append("Participants: \(names.joined(separator: ", "))")
         }
 
-        // Available tools
-        if !tools.isEmpty {
-            let toolDescriptions = tools.map(\.promptDescription)
-            parts.append("Available tools:\n" + toolDescriptions.map { "- \($0)" }.joined(separator: "\n"))
+        if !toolSchemas.isEmpty {
+            var toolSection = "You may call the following tools to help the user. "
+            toolSection += "To call a tool, emit a single line of the form `<tool_call>{\"tool\":\"NAME\",\"params\":{...}}</tool_call>` and stop. "
+            toolSection += "The system will run the tool and reply with `<tool_result>{...}</tool_result>`; you can then reply in natural language or call another tool.\n"
+            toolSection += "Available tools:\n"
+            toolSection += toolSchemas.map(\.promptLine).joined(separator: "\n")
+            parts.append(toolSection)
         }
 
-        // Custom system prompt override
         if let custom = conversation.agentConfig.systemPrompt, !custom.isEmpty {
             parts.append(custom)
         }
 
-        // Behavioral guidance
         parts.append("Be helpful, concise, and conversational. When multiple people are chatting, address them by name when relevant.")
 
         return parts.joined(separator: "\n\n")
