@@ -161,6 +161,14 @@ private struct ConversationDetailView: View {
     @State private var messageText: String = ""
     @State private var selectedPeerModel: String?
     @State private var showAISettings = false
+    @State private var showGroupWallet = false
+    @State private var showMembers = false
+    @State private var demoRunning = false
+    @FocusState private var isInputFocused: Bool
+
+    private var isDemoConversation: Bool {
+        conversation.title == DemoReservationDriver.conversationTitle
+    }
 
     private var chatService: ChatService { appState.chatService }
     private var aiParticipant: AIParticipant { appState.chatService.aiParticipant }
@@ -235,12 +243,29 @@ private struct ConversationDetailView: View {
         }
         .task(id: conversation.id) {
             await chatService.openConversation(conversation)
+            // Claim keyboard focus so typing works immediately after opening
+            // or switching conversations.
+            isInputFocused = true
         }
         .onDisappear {
             chatService.closeConversation()
         }
         .sheet(isPresented: $showAISettings) {
             AISettingsSheet(conversation: conversation, chatService: chatService)
+        }
+        .sheet(isPresented: $showGroupWallet) {
+            GroupWalletSheet(
+                conversation: conversation,
+                chatService: chatService,
+                currentUserID: appState.currentUserID
+            )
+        }
+        .sheet(isPresented: $showMembers) {
+            MembersSheet(
+                conversation: conversation,
+                chatService: chatService,
+                currentUserID: appState.currentUserID
+            )
         }
     }
 
@@ -251,6 +276,44 @@ private struct ConversationDetailView: View {
             Text(conversation.displayTitle())
                 .font(.headline)
             Spacer()
+            if isDemoConversation {
+                Button {
+                    playDemo()
+                } label: {
+                    if demoRunning {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label("Play demo", systemImage: "play.fill")
+                            .labelStyle(.titleAndIcon)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color(red: 0.0, green: 0.6, blue: 0.6))
+                .controlSize(.small)
+                .disabled(demoRunning)
+            }
+            HStack(spacing: 4) {
+                Text("$\(String(format: "%.2f", chatService.walletStore.balance(for: conversation.id)))")
+                    .font(.callout.monospacedDigit())
+                Button {
+                    showGroupWallet = true
+                } label: {
+                    Label("Wallet", systemImage: "creditcard")
+                }
+                .buttonStyle(.borderless)
+                .labelStyle(.iconOnly)
+                .help("Group wallet, contributions, and auto top-up")
+            }
+            if conversation.type == .group {
+                Button {
+                    showMembers = true
+                } label: {
+                    Label("Members", systemImage: "person.3")
+                }
+                .buttonStyle(.borderless)
+                .labelStyle(.iconOnly)
+                .help("View members and invite people")
+            }
             Button {
                 showAISettings = true
             } label: {
@@ -329,6 +392,7 @@ private struct ConversationDetailView: View {
                     .lineLimit(1...8)
                     .padding(8)
                     .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+                    .focused($isInputFocused)
                     .onSubmit { sendMessage() }
 
                 Button(action: sendMessage) {
@@ -342,6 +406,17 @@ private struct ConversationDetailView: View {
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
+        }
+    }
+
+    private func playDemo() {
+        guard !demoRunning else { return }
+        demoRunning = true
+        let conv = conversation
+        Task {
+            let driver = DemoReservationDriver(chatService: chatService)
+            await driver.run(conversationID: conv.id)
+            demoRunning = false
         }
     }
 
@@ -383,8 +458,148 @@ private struct ChatBubbleView: View {
             ToolCallBubble(content: message.content)
         case .toolResult:
             ToolResultBubble(content: message.content)
+        case .agentRequest:
+            MacAgentExchangeChip(content: message.content, incoming: false)
+        case .agentResponse:
+            MacAgentExchangeChip(content: message.content, incoming: true)
+        case .disclosureConsent:
+            MacDisclosureConsentChip(content: message.content)
+        case .system:
+            HStack {
+                Spacer()
+                Text(message.content)
+                    .font(.caption2.italic())
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.vertical, 8)
         default:
             TextBubble(message: message)
+        }
+    }
+}
+
+// MARK: - Mac agent-to-agent chip
+
+private struct MacAgentExchangeChip: View {
+    let content: String
+    let incoming: Bool
+
+    private var exchange: AgentExchange? {
+        guard let data = content.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(AgentExchange.self, from: data)
+    }
+
+    var body: some View {
+        if let exchange {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(Color(red: 0.0, green: 0.6, blue: 0.6), in: Circle())
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 4) {
+                            if incoming {
+                                Text(exchange.counterpartyName)
+                                Image(systemName: "arrow.right").font(.caption2)
+                                Text("Teale")
+                            } else {
+                                Text("Teale")
+                                Image(systemName: "arrow.right").font(.caption2)
+                                Text(exchange.counterpartyName)
+                            }
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        Text(exchange.headline)
+                            .font(.callout.weight(.medium))
+                    }
+                    Spacer()
+                }
+                if !exchange.payload.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(exchange.payload.sorted(by: { $0.key < $1.key }), id: \.key) { kv in
+                            HStack(alignment: .top, spacing: 8) {
+                                Text(kv.key.replacingOccurrences(of: "_", with: " "))
+                                    .font(.caption.monospaced().weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                                    .frame(width: 160, alignment: .leading)
+                                Text(kv.value)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer(minLength: 0)
+                            }
+                        }
+                    }
+                    .padding(.leading, 6)
+                }
+            }
+            .padding(14)
+            .background(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.0, green: 0.6, blue: 0.6).opacity(0.12),
+                        Color(red: 0.0, green: 0.6, blue: 0.6).opacity(0.04)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                in: RoundedRectangle(cornerRadius: 14)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(Color(red: 0.0, green: 0.6, blue: 0.6).opacity(0.3), lineWidth: 0.8)
+            )
+            .padding(.horizontal, 16)
+            .padding(.vertical, 4)
+        }
+    }
+}
+
+private struct MacDisclosureConsentChip: View {
+    let content: String
+
+    private var consent: DisclosureConsent? {
+        guard let data = content.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(DisclosureConsent.self, from: data)
+    }
+
+    var body: some View {
+        if let consent {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: "lock.shield.fill")
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(Color.orange, in: Circle())
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Share with \(consent.counterpartyName)?")
+                            .font(.callout.weight(.semibold))
+                        Text("Your agent will share only these items — nothing more.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(consent.disclosures, id: \.self) { item in
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "checkmark").foregroundStyle(.green).font(.caption2)
+                            Text(item).font(.caption)
+                        }
+                    }
+                }
+                .padding(.leading, 6)
+            }
+            .padding(14)
+            .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(Color.orange.opacity(0.3), lineWidth: 0.8)
+            )
+            .padding(.horizontal, 16)
+            .padding(.vertical, 4)
         }
     }
 }
@@ -393,37 +608,121 @@ private struct TextBubble: View {
     let message: DecryptedMessage
 
     private var isAI: Bool { message.isFromAgent }
-    private var isUser: Bool { !isAI && message.messageType == .text }
+    /// In a DM the human's messages have no explicit senderID; in the demo
+    /// conversation, "other humans" (Alex/Jamie/Sam) are inserted with real
+    /// sender UUIDs. That's the rule we use to distinguish right-side ("you")
+    /// from left-side ("other humans").
+    private var isYou: Bool { !isAI && message.senderID == nil }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: isUser ? "person.circle.fill" : "brain.head.profile")
-                .font(.system(size: 20))
-                .foregroundStyle(isUser ? .blue : .purple)
-                .frame(width: 24)
+        if isAI {
+            aiCenteredBubble
+        } else if isYou {
+            youBubble
+        } else {
+            otherBubble
+        }
+    }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text(isUser ? "You" : "Teale")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                ForEach(Array(MessageContentSegmenter.segments(message.content).enumerated()), id: \.offset) { _, segment in
-                    switch segment {
-                    case .text(let t):
-                        Text(LocalizedStringKey(t))
-                            .textSelection(.enabled)
-                            .font(.body)
-                            .lineSpacing(3)
-                    case .code(let language, let code):
-                        CodeBlockView(language: language, code: code)
-                    }
-                }
+    // Right-aligned Teal bubble for the local user.
+    private var youBubble: some View {
+        HStack(alignment: .bottom, spacing: 0) {
+            Spacer(minLength: 120)
+            VStack(alignment: .trailing, spacing: 6) {
+                messageContent(alignment: .trailing)
             }
-            Spacer(minLength: 0)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                Color(red: 0.0, green: 0.6, blue: 0.6),
+                in: UnevenRoundedRectangle(cornerRadii: RectangleCornerRadii(
+                    topLeading: 18, bottomLeading: 18, bottomTrailing: 4, topTrailing: 18
+                ))
+            )
+            .foregroundStyle(.white)
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(isUser ? Color.clear : Color.primary.opacity(0.03))
+        .padding(.vertical, 3)
+    }
+
+    // Left-aligned gray bubble for other participants.
+    private var otherBubble: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "person.circle.fill")
+                .font(.system(size: 20))
+                .foregroundStyle(.blue)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 6) {
+                messageContent(alignment: .leading)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                Color.primary.opacity(0.07),
+                in: UnevenRoundedRectangle(cornerRadii: RectangleCornerRadii(
+                    topLeading: 18, bottomLeading: 4, bottomTrailing: 18, topTrailing: 18
+                ))
+            )
+            Spacer(minLength: 120)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 3)
+    }
+
+    // Centered boxed card for AI — distinct from both sides of the chat.
+    private var aiCenteredBubble: some View {
+        HStack {
+            Spacer(minLength: 0)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                        .font(.caption)
+                        .foregroundStyle(Color(red: 0.0, green: 0.6, blue: 0.6))
+                    Text("Teale")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color(red: 0.0, green: 0.6, blue: 0.6))
+                    Spacer(minLength: 0)
+                }
+                messageContent(alignment: .leading)
+            }
+            .padding(14)
+            .frame(maxWidth: 640, alignment: .leading)
+            .background(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.0, green: 0.6, blue: 0.6).opacity(0.10),
+                        Color(red: 0.0, green: 0.6, blue: 0.6).opacity(0.03)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                in: RoundedRectangle(cornerRadius: 14)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(Color(red: 0.0, green: 0.6, blue: 0.6).opacity(0.25), lineWidth: 0.8)
+            )
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 6)
+    }
+
+    @ViewBuilder
+    private func messageContent(alignment: HorizontalAlignment) -> some View {
+        ForEach(Array(MessageContentSegmenter.segments(message.content).enumerated()), id: \.offset) { _, segment in
+            switch segment {
+            case .text(let t):
+                Text(LocalizedStringKey(t))
+                    .textSelection(.enabled)
+                    .font(.body)
+                    .lineSpacing(3)
+                    .multilineTextAlignment(alignment == .trailing ? .trailing : .leading)
+                    .frame(maxWidth: .infinity, alignment: alignment == .trailing ? .trailing : .leading)
+            case .code(let language, let code):
+                CodeBlockView(language: language, code: code)
+            }
+        }
     }
 }
 
@@ -555,26 +854,45 @@ private struct AIStreamingBubble: View {
     let text: String
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "brain.head.profile")
-                .font(.system(size: 20))
-                .foregroundStyle(.purple)
-                .frame(width: 24)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Teale")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+        HStack {
+            Spacer(minLength: 0)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                        .font(.caption)
+                        .foregroundStyle(Color(red: 0.0, green: 0.6, blue: 0.6))
+                    Text("Teale")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color(red: 0.0, green: 0.6, blue: 0.6))
+                    Spacer(minLength: 0)
+                }
                 Text(LocalizedStringKey(text))
                     .textSelection(.enabled)
                     .font(.body)
                     .lineSpacing(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(14)
+            .frame(maxWidth: 640, alignment: .leading)
+            .background(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.0, green: 0.6, blue: 0.6).opacity(0.10),
+                        Color(red: 0.0, green: 0.6, blue: 0.6).opacity(0.03)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                in: RoundedRectangle(cornerRadius: 14)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(Color(red: 0.0, green: 0.6, blue: 0.6).opacity(0.25), lineWidth: 0.8)
+            )
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Color.primary.opacity(0.03))
+        .padding(.horizontal, 24)
+        .padding(.vertical, 6)
     }
 }
 

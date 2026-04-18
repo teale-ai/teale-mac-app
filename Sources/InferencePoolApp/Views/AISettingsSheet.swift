@@ -10,6 +10,8 @@ struct AISettingsSheet: View {
     @State private var mentionOnly: Bool
     @State private var systemPrompt: String
     @State private var title: String
+    @State private var heartbeatsEnabled: Bool
+    @State private var memoryEntries: [MemoryEntry] = []
 
     init(conversation: Conversation, chatService: ChatService) {
         self.conversation = conversation
@@ -18,6 +20,7 @@ struct AISettingsSheet: View {
         _mentionOnly = State(initialValue: conversation.agentConfig.mentionOnly)
         _systemPrompt = State(initialValue: conversation.agentConfig.systemPrompt ?? "")
         _title = State(initialValue: conversation.title ?? "")
+        _heartbeatsEnabled = State(initialValue: conversation.heartbeatsEnabled)
     }
 
     var body: some View {
@@ -40,12 +43,48 @@ struct AISettingsSheet: View {
                             if newValue { autoRespond = false }
                         }
                         .help("@teale or @agent triggers a response.")
+                    Toggle("Proactive check-ins", isOn: $heartbeatsEnabled)
+                        .help("Teale can post unprompted nudges about upcoming dates, stale plans, and unanswered questions.")
                 }
 
                 Section("Custom System Prompt (optional)") {
                     TextEditor(text: $systemPrompt)
                         .frame(minHeight: 80)
                         .font(.callout)
+                }
+
+                Section("Group Memory (\(memoryEntries.count))") {
+                    if memoryEntries.isEmpty {
+                        Text("Teale will write facts about this group here as you chat — preferences, dates, running plans.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(memoryEntries) { entry in
+                            HStack(alignment: .top) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(entry.text)
+                                        .font(.callout)
+                                    if let category = entry.category {
+                                        Text(category)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                Button {
+                                    chatService.memoryStore.remove(id: entry.id, from: conversation.id)
+                                    refreshMemory()
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        }
+                        Button("Clear all memory", role: .destructive) {
+                            chatService.memoryStore.clear(conversationID: conversation.id)
+                            refreshMemory()
+                        }
+                    }
                 }
             }
             .formStyle(.grouped)
@@ -59,7 +98,12 @@ struct AISettingsSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 480, height: 460)
+        .frame(width: 520, height: 640)
+        .onAppear { refreshMemory() }
+    }
+
+    private func refreshMemory() {
+        memoryEntries = chatService.memoryStore.entries(for: conversation.id).reversed()
     }
 
     private func save() {
@@ -71,12 +115,14 @@ struct AISettingsSheet: View {
             persona: conversation.agentConfig.persona
         )
         let newTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let capturedHeartbeats = heartbeatsEnabled
 
         Task {
             await chatService.updateConversation(
                 id: conversation.id,
                 title: newTitle.isEmpty ? nil : newTitle,
-                agentConfig: newConfig
+                agentConfig: newConfig,
+                heartbeatsEnabled: capturedHeartbeats
             )
             dismiss()
         }
