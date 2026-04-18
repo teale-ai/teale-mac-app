@@ -95,6 +95,12 @@ struct SettingsView: View {
                     }
                 }
 
+                Picker("Appearance", selection: $state.appearance) {
+                    ForEach(AppAppearance.allCases) { option in
+                        Text(option.displayName).tag(option)
+                    }
+                }
+
                 Toggle(appState.loc("settings.keepAwake"), isOn: $state.keepAwake)
                 Text(appState.loc("settings.keepAwakeHelp"))
                     .font(.caption2)

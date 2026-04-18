@@ -171,7 +171,7 @@ public actor ClusterProvider: InferenceProvider {
 
     /// Look up a connected peer by device ID.
     public func peer(byID deviceID: UUID) -> PeerInfo? {
-        clusterManager.peers[deviceID]
+        clusterManager.peer(forID: deviceID)
     }
 
     // MARK: - Remote Generation

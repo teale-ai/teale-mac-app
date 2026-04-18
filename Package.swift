@@ -9,7 +9,7 @@ let package = Package(
         .iOS(.v17),
     ],
     products: [
-        .executable(name: "InferencePoolApp", targets: ["InferencePoolApp"]),
+        .executable(name: "Teale", targets: ["Teale"]),
         .executable(name: "teale", targets: ["TealeCLI"]),
         .executable(name: "TealeCompanion", targets: ["TealeCompanion"]),
         .library(name: "TealeSDK", targets: ["TealeSDK", "TealeSDKUI"]),
@@ -208,9 +208,11 @@ let package = Package(
             ]
         ),
 
-        // MARK: - InferencePoolApp (main executable)
+        // MARK: - Teale (main macOS app executable)
+        // Kept under Sources/InferencePoolApp/ for git history; target name drives
+        // the output binary filename, which is what macOS shows in the dock.
         .executableTarget(
-            name: "InferencePoolApp",
+            name: "Teale",
             dependencies: [
                 "AppCore",
                 "SharedTypes",
@@ -227,6 +229,7 @@ let package = Package(
                 "AuthKit",
                 "ChatKit",
             ],
+            path: "Sources/InferencePoolApp",
             exclude: ["Info.plist", "InferencePool.entitlements"]
         ),
 

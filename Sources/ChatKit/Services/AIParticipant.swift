@@ -19,6 +19,15 @@ public final class AIParticipant {
     /// Optional tool registry for orchestrator tool calls.
     public var toolRegistry: ToolRegistry?
 
+    /// Optional group memory store — when present, recent memory entries for
+    /// the active conversation are injected into the system prompt so the AI
+    /// starts every turn already knowing the group's context.
+    public var memoryStore: GroupMemoryStore?
+
+    /// Optional per-device preference store — the local user's preferences are
+    /// injected into the system prompt as "the typing user's personal context".
+    public var preferenceStore: UserPreferenceStore?
+
     /// Maximum number of tool-call iterations before the orchestrator gives up.
     public var maxIterations: Int = 4
 
@@ -195,6 +204,9 @@ public final class AIParticipant {
                 content = "<tool_result>\(content)</tool_result>"
             case .system:
                 role = "system"
+            case .walletEntry, .agentRequest, .agentResponse, .disclosureConsent:
+                // Bookkeeping / demo chips — not part of the model's chat context.
+                continue
             }
 
             apiMessages.append(APIMessage(role: role, content: content))
@@ -223,10 +235,29 @@ public final class AIParticipant {
             parts.append("Participants: \(names.joined(separator: ", "))")
         }
 
+        // Inject accumulated group memory — the AI starts every turn already
+        // aware of the running context (preferences, dates, plans, facts).
+        if let memoryStore, let entries = Optional(memoryStore.entries(for: conversation.id)), !entries.isEmpty {
+            let lines = entries.suffix(30).map { entry -> String in
+                let categoryTag = entry.category.map { " [\($0)]" } ?? ""
+                return "- \(entry.text)\(categoryTag)"
+            }
+            parts.append("Group memory (what you already know about this group):\n" + lines.joined(separator: "\n"))
+        }
+
+        // Inject the local user's personal preferences — only visible when the
+        // AI is running on the user's own device. Frame them as "the typing
+        // user" so the model doesn't attribute them to other participants.
+        if let preferenceStore, !preferenceStore.preferences.entries.isEmpty {
+            let lines = preferenceStore.preferences.entries.suffix(30).map { "- \($0.key): \($0.value)" }
+            parts.append("Local user's personal preferences (private to this device, treat as context about the person typing):\n" + lines.joined(separator: "\n"))
+        }
+
         if !toolSchemas.isEmpty {
             var toolSection = "You may call the following tools to help the user. "
             toolSection += "To call a tool, emit a single line of the form `<tool_call>{\"tool\":\"NAME\",\"params\":{...}}</tool_call>` and stop. "
             toolSection += "The system will run the tool and reply with `<tool_result>{...}</tool_result>`; you can then reply in natural language or call another tool.\n"
+            toolSection += "When you learn a durable fact about the group (a preference, a date, a plan), call `remember` so you don't forget it next time.\n"
             toolSection += "Available tools:\n"
             toolSection += toolSchemas.map(\.promptLine).joined(separator: "\n")
             parts.append(toolSection)

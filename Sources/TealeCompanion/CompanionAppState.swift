@@ -124,6 +124,8 @@ final class CompanionAppState {
     let chatService: ChatService
     let currentUserID: UUID
     let toolRegistry: ToolRegistry
+    private(set) var heartbeatScheduler: HeartbeatScheduler?
+    private(set) var autoTopUpScheduler: AutoTopUpScheduler?
 
     // Wallet
     var walletBalance: Double = 0.0
@@ -204,8 +206,35 @@ final class CompanionAppState {
         // Register orchestrator tools and wire the tool registry.
         toolRegistry.register(CalendarToolHandler())
         toolRegistry.register(SubAgentDispatchHandler(inferenceStream: inferenceStream))
+        toolRegistry.register(RememberTool(memoryStore: chatService.memoryStore, context: chatService))
+        toolRegistry.register(RecallTool(memoryStore: chatService.memoryStore, context: chatService))
+        toolRegistry.register(SearchHistoryTool(context: chatService))
+        toolRegistry.register(SetPreferenceTool(preferenceStore: chatService.preferenceStore))
+        toolRegistry.register(GetPreferencesTool(preferenceStore: chatService.preferenceStore))
         chatService.aiParticipant.toolRegistry = toolRegistry
+        chatService.aiParticipant.memoryStore = chatService.memoryStore
+        chatService.aiParticipant.preferenceStore = chatService.preferenceStore
         chatService.aiParticipant.onInferenceRequest = inferenceStream
+
+        // Personal-wallet → group-wallet debits. Companion keeps a simple local
+        // balance via `walletBalance`, so we just subtract and succeed.
+        chatService.onPersonalWalletDebit = { [weak self] amount, _, _ in
+            guard let self else { return false }
+            guard self.walletBalance >= amount else { return false }
+            self.walletBalance -= amount
+            return true
+        }
+
+        // Start proactive heartbeat scheduler on iOS too (mostly a no-op when
+        // the app is backgrounded, but works while in the foreground).
+        let scheduler = HeartbeatScheduler(chatService: chatService)
+        heartbeatScheduler = scheduler
+        scheduler.start()
+
+        // Start auto-top-up scheduler.
+        let topUp = AutoTopUpScheduler(chatService: chatService)
+        autoTopUpScheduler = topUp
+        topUp.start()
 
         // Load saved conversations; seed a default DM so the user always has one to open.
         await chatService.loadConversations()
@@ -220,6 +249,12 @@ final class CompanionAppState {
                 )
             )
         }
+
+        // Seed the X-ready agent-to-agent reservation demo.
+        _ = await DemoReservationDriver.ensureConversationExists(
+            chatService: chatService,
+            currentUserID: currentUserID
+        )
 
         // Scan for already-downloaded models
         await refreshDownloadedModels()

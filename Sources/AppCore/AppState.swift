@@ -161,6 +161,8 @@ public final class AppState {
     public let chatService: ChatService
     public let currentUserID: UUID
     public let toolRegistry = ToolRegistry()
+    public private(set) var heartbeatScheduler: HeartbeatScheduler?
+    public private(set) var autoTopUpScheduler: AutoTopUpScheduler?
 
     // UI State
     public var selectedModel: ModelDescriptor?
@@ -170,7 +172,7 @@ public final class AppState {
     public var activeDownloads: [String: Double] = [:]
     /// Models that just finished downloading — prompt user to load
     public var justDownloadedModel: ModelDescriptor?
-    public var currentView: AppView = .dashboard
+    public var currentView: AppView = .chat
     public var showSignIn: Bool = false
     public var loadingPhase: String = ""
     public var loadingProgress: Double?
@@ -271,6 +273,13 @@ public final class AppState {
         rawValue: UserDefaults.standard.string(forKey: "teale.language") ?? "en"
     ) ?? .english {
         didSet { UserDefaults.standard.set(language.rawValue, forKey: "teale.language") }
+    }
+
+    /// User-chosen UI appearance: follow system, force light, or force dark.
+    public var appearance: AppAppearance = AppAppearance(
+        rawValue: UserDefaults.standard.string(forKey: "teale.appearance") ?? "system"
+    ) ?? .system {
+        didSet { UserDefaults.standard.set(appearance.rawValue, forKey: "teale.appearance") }
     }
 
     public func loc(_ key: String) -> String {
@@ -538,8 +547,37 @@ public final class AppState {
         // Register orchestrator tools.
         self.toolRegistry.register(CalendarToolHandler())
         self.toolRegistry.register(SubAgentDispatchHandler(inferenceStream: inferenceStream))
+        self.toolRegistry.register(RememberTool(memoryStore: self.chatService.memoryStore, context: self.chatService))
+        self.toolRegistry.register(RecallTool(memoryStore: self.chatService.memoryStore, context: self.chatService))
+        self.toolRegistry.register(SearchHistoryTool(context: self.chatService))
+        self.toolRegistry.register(SetPreferenceTool(preferenceStore: self.chatService.preferenceStore))
+        self.toolRegistry.register(GetPreferencesTool(preferenceStore: self.chatService.preferenceStore))
         self.chatService.aiParticipant.toolRegistry = self.toolRegistry
+        self.chatService.aiParticipant.memoryStore = self.chatService.memoryStore
+        self.chatService.aiParticipant.preferenceStore = self.chatService.preferenceStore
         self.chatService.aiParticipant.onInferenceRequest = inferenceStream
+
+        // Wire personal-wallet → group-wallet debits.
+        self.chatService.onPersonalWalletDebit = { [weak self] amount, _, memo in
+            guard let self else { return false }
+            // Peer ID is the "group wallet" — we tag with the conversation-scoped memo.
+            await self.wallet.recordTransferDebit(
+                amount: USDCAmount(amount),
+                toPeer: "group-wallet",
+                description: memo
+            )
+            return true
+        }
+
+        // Start proactive heartbeat scheduler.
+        let scheduler = HeartbeatScheduler(chatService: self.chatService)
+        self.heartbeatScheduler = scheduler
+        scheduler.start()
+
+        // Start auto-top-up scheduler.
+        let topUp = AutoTopUpScheduler(chatService: self.chatService)
+        self.autoTopUpScheduler = topUp
+        topUp.start()
     }
 
     /// Call once at app launch to initialize async components (auth, credit ledger, agent)
@@ -561,6 +599,12 @@ public final class AppState {
                 )
             )
         }
+
+        // Seed the X-ready agent-to-agent reservation demo if it doesn't exist.
+        _ = await DemoReservationDriver.ensureConversationExists(
+            chatService: chatService,
+            currentUserID: currentUserID
+        )
 
         // Restore power assertion if keep-awake was enabled
         if keepAwake { updatePowerAssertion() }
@@ -1165,7 +1209,7 @@ public final class AppState {
 
     /// Tell WANManager which peers are reachable on LAN so it skips them for WAN auto-connect.
     private func syncLANPeersToWAN() {
-        let lanIDs = Set(clusterManager.peers.keys.map(\.uuidString))
+        let lanIDs = Set(clusterManager.peerIDs().map(\.uuidString))
         wanManager.lanPeerNodeIDs = lanIDs
     }
 
@@ -1447,6 +1491,22 @@ public enum AppView: Hashable {
     case agents
     case devices
     case settings
+}
+
+public enum AppAppearance: String, CaseIterable, Hashable, Identifiable, Sendable {
+    case system
+    case light
+    case dark
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .system: return "System"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
 }
 
 public enum InferenceBackend: String, CaseIterable, Hashable, Identifiable {
